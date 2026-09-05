@@ -95,3 +95,4 @@ When credentials are configured, navigate to **[ HARDWARE VALIDATION ]** in the 
 1. **Replay Freshness**: The prototype lacks a session nonce or sequence counter. Same-message replay is indistinguishable from fresh transmission (0 verification errors). Different-message replay causes ~50% verification errors due to SHA-256 avalanche properties.
 2. **Baseline Noise Rate ($p_0$)**: $p_0$ is a calibrated experimental parameter for statistical hypothesis testing, not a universal constant.
 3. **Simulation Backend**: 256-qubit security experiments use Qiskit `AerSimulator`. Physical hardware validation is performed on 3-qubit representative primitives.
+# QKD
