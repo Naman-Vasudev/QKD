@@ -17,6 +17,11 @@ scratch/
 .system_generated/
 *.json.tmp
 
+# Virtual environments
+.venv/
+venv/
+ENV/
+
 # IDE files
 .vscode/
 .idea/

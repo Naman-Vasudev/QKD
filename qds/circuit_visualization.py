@@ -28,6 +28,7 @@ def get_state_math_info(state_label: str) -> Dict[str, Any]:
     info_map = {
         "|0>": {
             "label": "|0>",
+            "state_label": "|0>",
             "basis": "Z",
             "eigenvalue": +1,
             "statevector_str": "[1.0, 0.0]",
@@ -38,6 +39,7 @@ def get_state_math_info(state_label: str) -> Dict[str, Any]:
         },
         "|1>": {
             "label": "|1>",
+            "state_label": "|1>",
             "basis": "Z",
             "eigenvalue": -1,
             "statevector_str": "[0.0, 1.0]",
@@ -48,6 +50,7 @@ def get_state_math_info(state_label: str) -> Dict[str, Any]:
         },
         "|+>": {
             "label": "|+>",
+            "state_label": "|+>",
             "basis": "X",
             "eigenvalue": +1,
             "statevector_str": "[0.7071, 0.7071]",
@@ -58,6 +61,7 @@ def get_state_math_info(state_label: str) -> Dict[str, Any]:
         },
         "|->": {
             "label": "|->",
+            "state_label": "|->",
             "basis": "X",
             "eigenvalue": -1,
             "statevector_str": "[0.7071, -0.7071]",
@@ -68,6 +72,7 @@ def get_state_math_info(state_label: str) -> Dict[str, Any]:
         },
         "|+i>": {
             "label": "|+i>",
+            "state_label": "|+i>",
             "basis": "Y",
             "eigenvalue": +1,
             "statevector_str": "[0.7071, 0.7071j]",
@@ -78,6 +83,7 @@ def get_state_math_info(state_label: str) -> Dict[str, Any]:
         },
         "|-i>": {
             "label": "|-i>",
+            "state_label": "|-i>",
             "basis": "Y",
             "eigenvalue": -1,
             "statevector_str": "[0.7071, -0.7071j]",
