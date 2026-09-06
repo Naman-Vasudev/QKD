@@ -45,9 +45,12 @@ def get_ibm_token() -> Optional[str]:
     return None
 
 
-def is_hardware_configured() -> Tuple[bool, str]:
+def is_hardware_configured(token: Optional[str] = None) -> Tuple[bool, str]:
     """
     Check if IBM Quantum hardware access is available and configured.
+
+    Args:
+        token: Optional API token override to validate.
 
     Returns:
         Tuple of (configured: bool, status_message: str)
@@ -55,23 +58,28 @@ def is_hardware_configured() -> Tuple[bool, str]:
     if not HAS_IBM_RUNTIME:
         return False, "qiskit-ibm-runtime package is not installed."
 
-    token = get_ibm_token()
-    if not token:
-        return False, "IBM Quantum API Token is not configured in environment or Streamlit secrets."
+    tok = token or get_ibm_token()
+    if not tok:
+        return False, "IBM Quantum API Token is not configured. Enter a token to authenticate."
 
-    return True, "IBM Quantum hardware interface is configured and ready."
+    try:
+        service = _get_runtime_service(token=tok)
+        active_channel = getattr(service, "channel", "ibm_quantum")
+        return True, f"Authenticated to IBM Quantum Platform ({active_channel})."
+    except Exception as exc:
+        return False, f"Authentication check failed: {str(exc)}"
 
 
 def _get_runtime_service(
     token: Optional[str] = None,
-    channel: str = "ibm_cloud",
+    channel: str = "ibm_quantum",
 ) -> QiskitRuntimeService:
     """
     Initialize QiskitRuntimeService trying specified channel, falling back gracefully.
 
     Args:
         token: IBM Quantum API token.
-        channel: Preferred channel name ("ibm_cloud" or "ibm_quantum").
+        channel: Preferred channel name ("ibm_quantum" default or "ibm_cloud").
 
     Returns:
         Initialized QiskitRuntimeService instance.
@@ -82,10 +90,10 @@ def _get_runtime_service(
     tok = token or get_ibm_token()
 
     channels_to_try = [channel]
-    if channel == "ibm_cloud":
-        channels_to_try.append("ibm_quantum")
-    else:
+    if channel == "ibm_quantum":
         channels_to_try.append("ibm_cloud")
+    else:
+        channels_to_try.append("ibm_quantum")
 
     last_exc = None
     for ch in channels_to_try:
@@ -109,14 +117,14 @@ def _get_runtime_service(
 
 def get_available_hardware_backends(
     token: Optional[str] = None,
-    channel: str = "ibm_cloud",
+    channel: str = "ibm_quantum",
 ) -> List[Dict[str, Any]]:
     """
     Retrieve available IBM Quantum hardware backends.
 
     Args:
         token: Optional API token override.
-        channel: Channel type ("ibm_cloud" or "ibm_quantum").
+        channel: Channel type ("ibm_quantum" or "ibm_cloud").
 
     Returns:
         List of backend metadata dictionaries.
@@ -133,11 +141,18 @@ def get_available_hardware_backends(
         backends = service.backends(simulator=False, operational=True)
         results = []
         for b in backends:
+            status_obj = getattr(b, "status", lambda: None)()
+            pending = getattr(status_obj, "pending_jobs", 0) if status_obj else 0
+            basis_gates = getattr(b.configuration(), "basis_gates", ["rz", "sx", "x", "cz", "id"]) if hasattr(b, "configuration") else []
+            processor = getattr(b.configuration(), "processor_type", {}).get("family", "Eagle QPU") if hasattr(b, "configuration") else "Eagle QPU"
+            
             results.append({
                 "name": b.name,
                 "num_qubits": b.num_qubits,
                 "operational": getattr(b, "operational", True),
-                "pending_jobs": getattr(b.status(), "pending_jobs", 0),
+                "pending_jobs": pending,
+                "basis_gates": basis_gates,
+                "processor": processor,
             })
         return results
     except Exception:
@@ -254,9 +269,16 @@ def run_hardware_teleportation_experiment(
         tot_hw = sum(hw_counts.values()) or shots
         hw_probs = {k: v / tot_hw for k, v in hw_counts.items()}
 
+        # Compute classical fidelity / Bhattacharyya coefficient squared
+        all_keys = set(ideal_probs.keys()).union(hw_probs.keys())
+        bhatt = sum(np.sqrt(ideal_probs.get(k, 0.0) * hw_probs.get(k, 0.0)) for k in all_keys)
+        fidelity = float(bhatt ** 2)
+
         result_dict["success"] = True
         result_dict["hardware_counts"] = hw_counts
         result_dict["hardware_probs"] = hw_probs
+        result_dict["fidelity"] = fidelity
+        result_dict["transpiled_depth"] = isa_circuit.depth() if 'isa_circuit' in locals() else qc_ideal.depth()
         return result_dict
 
     except Exception as exc:
