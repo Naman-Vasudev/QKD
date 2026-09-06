@@ -13,8 +13,10 @@ SCIENTIFIC INTEGRITY & DISCLOSURES:
 - This is a Qiskit Aer simulation laboratory, with optional IBM QPU validation.
 """
 
+import base64
 import json
 import math
+import os
 import platform
 import sys
 from typing import List, Dict, Any, Optional
@@ -58,114 +60,215 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── CSS: Scientific typographic style ────────────────────────────────────────
-st.markdown(
+# ─── Load Background Image (Qpi AI Quantum Computer Hardware) ─────────────────
+bg_css_override = ""
+bg_img_path = os.path.join(os.path.dirname(__file__), "assets", "quantum_bg.png")
+if os.path.exists(bg_img_path):
+    with open(bg_img_path, "rb") as img_file:
+        b64_bg = base64.b64encode(img_file.read()).decode()
+    bg_css_override = f"""
+    .stApp {{
+        background: linear-gradient(rgba(10, 4, 20, 0.78), rgba(16, 7, 32, 0.85)),
+                    url("data:image/png;base64,{b64_bg}") no-repeat center center fixed !important;
+        background-size: cover !important;
+    }}
     """
+
+# ─── CSS: Purplish-Pinkish Cyber-Quantum Design System ────────────────────────
+css_style_content = """
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+
     .stApp {
-        background-color: #F8F9FA;
-        color: #0D1117;
+        background: radial-gradient(circle at 10% 10%, rgba(236, 72, 153, 0.12) 0%, transparent 45%),
+                    radial-gradient(circle at 90% 90%, rgba(168, 85, 247, 0.15) 0%, transparent 45%),
+                    #08040F !important;
+        color: #F3E8FF !important;
+        font-family: 'Inter', sans-serif !important;
     }
+
+    section[data-testid="stSidebar"] {
+        background-color: #110722 !important;
+        border-right: 1px solid rgba(236, 72, 153, 0.25) !important;
+    }
+    section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {
+        color: #F472B6 !important;
+        font-family: 'Outfit', sans-serif !important;
+    }
+
     h1 {
-        font-family: "Georgia", "Times New Roman", serif;
-        font-size: 1.55rem;
-        font-weight: 700;
-        color: #0D1117;
-        border-bottom: 2px solid #0D1117;
-        padding-bottom: 6px;
-        letter-spacing: 0.05em;
+        font-family: 'Outfit', sans-serif !important;
+        font-size: 2.1rem !important;
+        font-weight: 800 !important;
+        background: linear-gradient(135deg, #FF60B5 0%, #EC4899 40%, #C084FC 80%, #818CF8 100%);
+        -webkit-background-clip: text !important;
+        -webkit-text-fill-color: transparent !important;
+        border-bottom: 2px solid transparent !important;
+        border-image: linear-gradient(90deg, #EC4899, #A855F7, transparent) 1 !important;
+        padding-bottom: 8px !important;
+        margin-bottom: 12px !important;
+        letter-spacing: -0.02em !important;
+        text-shadow: 0 0 25px rgba(236, 72, 153, 0.25);
     }
+
     h2 {
-        font-family: "Georgia", "Times New Roman", serif;
-        font-size: 1.20rem;
-        font-weight: 600;
-        color: #0D1117;
-        border-bottom: 1px solid #CDD1D7;
-        padding-bottom: 4px;
-        margin-top: 1.4em;
+        font-family: 'Outfit', sans-serif !important;
+        font-size: 1.45rem !important;
+        font-weight: 700 !important;
+        color: #E9D5FF !important;
+        border-bottom: 1px solid rgba(236, 72, 153, 0.25) !important;
+        padding-bottom: 6px !important;
+        margin-top: 1.6em !important;
     }
+
     h3 {
-        font-family: "Georgia", "Times New Roman", serif;
-        font-size: 1.00rem;
-        font-weight: 600;
-        color: #24292F;
-        margin-top: 1em;
+        font-family: 'Outfit', sans-serif !important;
+        font-size: 1.15rem !important;
+        font-weight: 600 !important;
+        color: #C084FC !important;
+        margin-top: 1.2em !important;
     }
+
     .status-normal {
-        border-left: 4px solid #1A7F37;
-        background-color: #DAFBE1;
-        padding: 10px 14px;
-        font-family: "Cascadia Code", "Consolas", monospace;
-        font-size: 0.88rem;
+        border-left: 4px solid #10B981;
+        background: linear-gradient(90deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.03));
+        padding: 12px 18px;
+        border-radius: 0 8px 8px 0;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.90rem;
         font-weight: 600;
-        color: #116329;
-    }
-    .status-threat {
-        border-left: 4px solid #CF222E;
-        background-color: #FFEBE9;
-        padding: 10px 14px;
-        font-family: "Cascadia Code", "Consolas", monospace;
-        font-size: 0.88rem;
-        font-weight: 600;
-        color: #82071E;
-    }
-    .security-gap-banner {
-        border: 2px solid #CF222E;
-        background-color: #FFEBE9;
-        padding: 12px 16px;
-        font-family: "Cascadia Code", "Consolas", monospace;
-        font-size: 0.85rem;
-        color: #82071E;
+        color: #34D399;
+        box-shadow: 0 0 15px rgba(16, 185, 129, 0.15);
         margin: 12px 0;
     }
-    .info-box {
-        border-left: 4px solid #0550AE;
-        background-color: #DDF4FF;
-        padding: 10px 14px;
+
+    .status-threat {
+        border-left: 4px solid #FF2A85;
+        background: linear-gradient(90deg, rgba(255, 42, 133, 0.2), rgba(255, 42, 133, 0.04));
+        padding: 12px 18px;
+        border-radius: 0 8px 8px 0;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.90rem;
+        font-weight: 600;
+        color: #FF70A6;
+        box-shadow: 0 0 20px rgba(255, 42, 133, 0.25);
+        margin: 12px 0;
+    }
+
+    .security-gap-banner {
+        border: 2px solid #FF2A85;
+        background: linear-gradient(135deg, rgba(255, 42, 133, 0.15), rgba(168, 85, 247, 0.1));
+        padding: 16px 20px;
+        border-radius: 10px;
+        font-family: 'JetBrains Mono', monospace;
         font-size: 0.88rem;
-        color: #0A3069;
-        margin: 8px 0;
+        color: #FFA5C9;
+        box-shadow: 0 0 25px rgba(255, 42, 133, 0.3);
+        margin: 16px 0;
     }
+
+    .info-box {
+        border-left: 4px solid #A855F7;
+        background: linear-gradient(90deg, rgba(168, 85, 247, 0.15), rgba(236, 72, 153, 0.03));
+        padding: 12px 18px;
+        border-radius: 0 8px 8px 0;
+        font-size: 0.90rem;
+        color: #E9D5FF;
+        margin: 12px 0;
+    }
+
     .pipeline-step {
-        border: 1px solid #CDD1D7;
-        background-color: #FFFFFF;
-        padding: 10px 14px;
-        font-family: "Cascadia Code", "Consolas", monospace;
-        font-size: 0.82rem;
-        color: #0D1117;
-        margin: 4px 0;
+        border: 1px solid rgba(236, 72, 153, 0.3);
+        background: rgba(22, 10, 42, 0.8);
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.85rem;
+        color: #F472B6;
+        margin: 6px 0;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
     }
+
     pre, code {
-        font-family: "Cascadia Code", "Consolas", "Courier New", monospace !important;
+        font-family: 'JetBrains Mono', monospace !important;
     }
+
     .metric-label {
         font-size: 0.78rem;
-        color: #57606A;
-        font-family: "Georgia", serif;
+        color: #C084FC;
+        font-family: 'Outfit', sans-serif;
         text-transform: uppercase;
         letter-spacing: 0.06em;
     }
+
     .metric-value {
-        font-size: 1.10rem;
-        font-family: "Cascadia Code", "Consolas", monospace;
+        font-size: 1.15rem;
+        font-family: 'JetBrains Mono', monospace;
         font-weight: 600;
-        color: #0D1117;
+        color: #FF70A6;
+        text-shadow: 0 0 10px rgba(255, 112, 166, 0.3);
     }
+
     .sec-header {
-        font-family: "Georgia", serif;
-        font-size: 1.05rem;
+        font-family: 'Outfit', sans-serif;
+        font-size: 1.10rem;
         font-weight: 700;
-        color: #0550AE;
-        background-color: #F0F6FC;
-        padding: 6px 12px;
-        border-left: 3px solid #0550AE;
-        margin-top: 1.2em;
-        margin-bottom: 0.6em;
+        color: #FF60B5;
+        background: linear-gradient(90deg, rgba(236, 72, 153, 0.22), rgba(168, 85, 247, 0.08));
+        padding: 8px 16px;
+        border-left: 4px solid #EC4899;
+        border-radius: 0 6px 6px 0;
+        margin-top: 1.4em;
+        margin-bottom: 0.8em;
+        letter-spacing: 0.03em;
+    }
+
+    [data-testid="stMetric"] {
+        background: rgba(22, 10, 42, 0.75) !important;
+        border: 1px solid rgba(236, 72, 153, 0.25) !important;
+        border-radius: 10px !important;
+        padding: 12px 16px !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), inset 0 0 15px rgba(236, 72, 153, 0.05) !important;
+    }
+    [data-testid="stMetricLabel"] {
+        font-family: 'Outfit', sans-serif !important;
+        font-size: 0.82rem !important;
+        color: #C084FC !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 1.25rem !important;
+        font-weight: 700 !important;
+        color: #FF70A6 !important;
+        text-shadow: 0 0 10px rgba(255, 112, 166, 0.3) !important;
+    }
+
+    .stButton > button {
+        background: linear-gradient(135deg, #EC4899 0%, #A855F7 100%) !important;
+        color: #FFFFFF !important;
+        font-family: 'Outfit', sans-serif !important;
+        font-weight: 700 !important;
+        border: none !important;
+        border-radius: 8px !important;
+        padding: 10px 24px !important;
+        box-shadow: 0 0 20px rgba(236, 72, 153, 0.4) !important;
+        transition: all 0.25s ease-in-out !important;
+    }
+    .stButton > button:hover {
+        transform: translateY(-2px) scale(1.02) !important;
+        box-shadow: 0 0 30px rgba(236, 72, 153, 0.65) !important;
+    }
+
+    [data-testid="stDataFrame"] {
+        border: 1px solid rgba(236, 72, 153, 0.25) !important;
+        border-radius: 10px !important;
     }
     </style>
-    """,
-    unsafe_allow_html=True,
-)
+"""
+
+st.markdown(css_style_content + f"<style>{bg_css_override}</style>", unsafe_allow_html=True)
 
 # ─── Sidebar: Navigation + Global Configuration ───────────────────────────────
 st.sidebar.markdown("## QUANTUM DIGITAL SIGNATURE\n### Security Laboratory")
@@ -270,22 +373,27 @@ def _plot_pmf(n: int, p0: float, k_obs: int, alpha_val: float) -> plt.Figure:
             break
 
     fig, ax = plt.subplots(figsize=(7, 3))
-    ax.plot(x_vals, pmf_vals, color="#1E3A5F", linewidth=1.2, marker="o", markersize=3,
+    fig.patch.set_facecolor('#130825')
+    ax.set_facecolor('#0B0414')
+    ax.plot(x_vals, pmf_vals, color="#C084FC", linewidth=1.8, marker="o", markersize=4,
             label=f"Binomial PMF (n={n}, p0={p0})")
-    ax.fill_between(x_vals, pmf_vals, alpha=0.12, color="#1E3A5F")
+    ax.fill_between(x_vals, pmf_vals, alpha=0.25, color="#A855F7")
 
     if k_crit is not None and k_crit <= x_max:
         reject_x = x_vals[x_vals >= k_crit]
         ax.fill_between(reject_x, binom.pmf(reject_x, n, p0),
-                        alpha=0.35, color="#CF222E", label=f"Rejection Region (alpha={alpha_val})")
+                        alpha=0.45, color="#FF2A85", label=f"Rejection Region (alpha={alpha_val})")
 
-    ax.axvline(k_obs, color="#CF222E", linestyle="--", linewidth=1.5,
+    ax.axvline(k_obs, color="#FF2A85", linestyle="--", linewidth=1.8,
                label=f"Observed k = {k_obs}")
-    ax.set_xlabel("Number of Verification Errors (k)")
-    ax.set_ylabel("Probability Mass P(K = k | n, p0)")
-    ax.set_title("Exact Binomial Error Distribution under Null Hypothesis H0: p = p0")
-    ax.grid(True, linestyle="--", alpha=0.4)
-    ax.legend(fontsize=8)
+    ax.set_xlabel("Number of Verification Errors (k)", color="#E9D5FF")
+    ax.set_ylabel("Probability Mass P(K = k | n, p0)", color="#E9D5FF")
+    ax.set_title("Exact Binomial Error Distribution under Null Hypothesis H0: p = p0", color="#FF70A6", fontsize=10, fontweight="bold")
+    ax.grid(True, linestyle="--", alpha=0.2, color="#A855F7")
+    ax.tick_params(colors="#C084FC")
+    for spine in ax.spines.values():
+        spine.set_color("rgba(236, 72, 153, 0.3)")
+    ax.legend(fontsize=8, facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF")
     fig.tight_layout()
     return fig
 
@@ -390,9 +498,11 @@ def _render_position_trace_table_and_map(detailed_results: List[Dict[str, Any]],
     if len(grid_outcomes) == 256:
         grid_2d = grid_outcomes.reshape(16, 16)
         fig_map, ax_map = plt.subplots(figsize=(4, 4))
-        cmap = matplotlib.colors.ListedColormap(["#CF222E", "#1A7F37"])
+        fig_map.patch.set_facecolor('#130825')
+        ax_map.set_facecolor('#0B0414')
+        cmap = matplotlib.colors.ListedColormap(["#FF2A85", "#10B981"])
         ax_map.imshow(grid_2d, cmap=cmap, vmin=0, vmax=1, interpolation="nearest", aspect="equal")
-        ax_map.set_title("256-Qubit Outcome Map (Green=MATCH, Red=MISMATCH)", fontsize=8)
+        ax_map.set_title("256-Qubit Outcome Map (Green=MATCH, Red=MISMATCH)", fontsize=8, color="#F3E8FF")
         ax_map.set_xticks([])
         ax_map.set_yticks([])
         st.pyplot(fig_map)
@@ -831,12 +941,17 @@ elif nav_section == "[ QUANTUM LAB ]":
             values = list(counts.values())
 
             fig_h, ax_h = plt.subplots(figsize=(max(4, len(labels) * 0.8 + 2), 3))
-            ax_h.bar(range(len(labels)), values, color="#1E3A5F", width=0.5)
+            fig_h.patch.set_facecolor('#130825')
+            ax_h.set_facecolor('#0B0414')
+            ax_h.bar(range(len(labels)), values, color="#EC4899", width=0.5, edgecolor="#FF70A6")
             ax_h.set_xticks(range(len(labels)))
-            ax_h.set_xticklabels(labels, fontfamily="monospace", fontsize=8)
-            ax_h.set_ylabel("Count")
-            ax_h.set_title(f"AerSimulator Outcome Distribution (N = {total_shots} shots)")
-            ax_h.grid(True, axis="y", linestyle="--", alpha=0.4)
+            ax_h.set_xticklabels(labels, fontfamily="monospace", fontsize=8, color="#F3E8FF")
+            ax_h.set_ylabel("Count", color="#E9D5FF")
+            ax_h.set_title(f"AerSimulator Outcome Distribution (N = {total_shots} shots)", color="#FF70A6", fontsize=9, fontweight="bold")
+            ax_h.grid(True, axis="y", linestyle="--", alpha=0.2, color="#A855F7")
+            ax_h.tick_params(colors="#C084FC")
+            for spine in ax_h.spines.values():
+                spine.set_color("rgba(236, 72, 153, 0.3)")
             fig_h.tight_layout()
             st.pyplot(fig_h)
             plt.close(fig_h)
@@ -1578,19 +1693,24 @@ elif nav_section == "[ ANALYSIS ]":
             y_obs = [d["observed_error_rate"] for d in y_data]
 
             fig_bw, axes_bw = plt.subplots(1, 3, figsize=(13, 4), sharey=True)
+            fig_bw.patch.set_facecolor('#130825')
             for ax_, obs_, label_, color_ in zip(
                 axes_bw,
                 [z_obs, x_obs, y_obs],
                 ["Z Basis (Sensitive)", "X Basis (Invariant)", "Y Basis (Sensitive)"],
-                ["#CF222E", "#0550AE", "#7A3E9D"],
+                ["#FF2A85", "#38BDF8", "#C084FC"],
             ):
-                ax_.plot(ps, obs_, "o-", color=color_, label="Observed")
-                ax_.set_xlabel("p_attack")
-                ax_.set_title(label_, fontsize=10)
-                ax_.grid(True, linestyle="--", alpha=0.4)
-                ax_.legend(fontsize=8)
+                ax_.set_facecolor('#0B0414')
+                ax_.plot(ps, obs_, "o-", color=color_, linewidth=2, markersize=6, label="Observed")
+                ax_.set_xlabel("p_attack", color="#E9D5FF")
+                ax_.set_title(label_, fontsize=10, color="#FF70A6", fontweight="bold")
+                ax_.grid(True, linestyle="--", alpha=0.2, color="#A855F7")
+                ax_.tick_params(colors="#C084FC")
+                for spine in ax_.spines.values():
+                    spine.set_color("rgba(236, 72, 153, 0.3)")
+                ax_.legend(fontsize=8, facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF")
 
-            axes_bw[0].set_ylabel("Verification Error Rate")
+            axes_bw[0].set_ylabel("Verification Error Rate", color="#E9D5FF")
             fig_bw.tight_layout()
             st.pyplot(fig_bw)
             plt.close(fig_bw)

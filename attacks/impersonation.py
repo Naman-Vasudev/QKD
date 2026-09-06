@@ -15,7 +15,7 @@ SCIENTIFIC DISCLOSURES & THREAT MODEL:
 """
 
 import random
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from core.models import EncodedQubit
 from core.backend import QuantumBackendAdapter
 from qds.encoding import encode_message
