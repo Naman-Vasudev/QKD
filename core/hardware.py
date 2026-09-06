@@ -190,6 +190,11 @@ def is_hardware_configured(
 
 _SERVICE_CACHE: Dict[Tuple[str, str, str], Any] = {}
 _BACKENDS_CACHE: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+# Token-only fallback cache: reuse existing service for same token regardless of instance/channel.
+# This prevents double-instantiation of QiskitRuntimeService which causes a native C segfault on
+# Streamlit Cloud (Python 3.14 + qiskit-ibm-runtime). The full cache key is still preferred,
+# but if a service was already created for this token we return it instead of creating a new one.
+_SERVICE_BY_TOKEN: Dict[str, Any] = {}
 
 
 DEFAULT_KNOWN_HERON_QPUS: List[Dict[str, Any]] = [
@@ -230,6 +235,12 @@ def _get_runtime_service(
 ) -> "QiskitRuntimeService":
     """
     Initialize QiskitRuntimeService, caching the result to prevent redundant network delays.
+
+    Uses two cache layers:
+    1. Full cache key (token, channel, instance) — exact match.
+    2. Token-only fallback — reuses any existing service for the same token, regardless of
+       channel/instance. This prevents double-instantiation which causes a native C segfault
+       on Streamlit Cloud (Python 3.14 + qiskit-ibm-runtime).
     """
     if not HAS_IBM_RUNTIME:
         raise ImportError("qiskit-ibm-runtime package is not installed.")
@@ -246,6 +257,13 @@ def _get_runtime_service(
     if cache_key in _SERVICE_CACHE:
         return _SERVICE_CACHE[cache_key]
 
+    # Token-only fallback: reuse any existing service for this token to avoid
+    # creating a second QiskitRuntimeService instance (causes segfault on Streamlit Cloud).
+    if tok and tok in _SERVICE_BY_TOKEN:
+        cached_srv = _SERVICE_BY_TOKEN[tok]
+        _SERVICE_CACHE[cache_key] = cached_srv
+        return cached_srv
+
     channels_to_try = [effective_channel]
     if effective_channel == "ibm_quantum":
         channels_to_try.append("ibm_cloud")
@@ -261,6 +279,8 @@ def _get_runtime_service(
         try:
             srv = QiskitRuntimeService(**kwargs)
             _SERVICE_CACHE[cache_key] = srv
+            if tok:
+                _SERVICE_BY_TOKEN[tok] = srv
             try:
                 QiskitRuntimeService.save_account(channel=ch, token=tok, instance=inst or None, overwrite=True, set_as_default=True)
             except Exception:
@@ -275,6 +295,8 @@ def _get_runtime_service(
                         kwargs_no_inst["token"] = tok
                     srv = QiskitRuntimeService(**kwargs_no_inst)
                     _SERVICE_CACHE[cache_key] = srv
+                    if tok:
+                        _SERVICE_BY_TOKEN[tok] = srv
                     return srv
                 except Exception:
                     pass
@@ -282,9 +304,12 @@ def _get_runtime_service(
     try:
         srv = QiskitRuntimeService()
         _SERVICE_CACHE[cache_key] = srv
+        if tok:
+            _SERVICE_BY_TOKEN[tok] = srv
         return srv
     except Exception as exc:
         raise last_exc or exc
+
 
 
 def get_available_hardware_backends(
