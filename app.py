@@ -1488,10 +1488,10 @@ elif nav_section == "Hardware Validation":
                 with col_action1:
                     job_url = f"https://quantum.ibm.com/jobs/{job_id_val}"
                     st.markdown(
-                        f'👉 <a href="{job_url}" target="_blank" style="color: #60A5FA; font-weight: bold;">Track Job {job_id_val} on IBM Quantum Cloud Dashboard</a>',
+                        f' <a href="{job_url}" target="_blank" style="color: #60A5FA; font-weight: bold;">Track Job {job_id_val} on IBM Quantum Cloud Dashboard</a>',
                         unsafe_allow_html=True,
                     )
-                    if st.button("🔄 Re-query IBM Cloud for Job Result", key="recheck_hw_job_btn"):
+                    if st.button(" Re-query IBM Cloud for Job Result", key="recheck_hw_job_btn"):
                         with st.spinner(f"Re-querying IBM Cloud for Job ID {job_id_val}..."):
                             refetched_res = fetch_ibm_job_result(
                                 job_id=job_id_val,
@@ -1506,7 +1506,7 @@ elif nav_section == "Hardware Validation":
                             st.rerun()
 
             with col_action2:
-                if st.button("⚡ Run Instant Offline Noise Sim (fake_fez)", key="fallback_fake_fez_btn"):
+                if st.button(" Run Instant Offline Noise Sim (fake_fez)", key="fallback_fake_fez_btn"):
                     with st.spinner("Executing 156-qubit Heron r2 realistic noise model locally..."):
                         noise_res = run_hardware_teleportation_experiment(
                             state_label=hw_state,
