@@ -39,9 +39,12 @@ from qds.circuit_visualization import (
 from core.backend import QuantumBackendAdapter
 from core.hardware import (
     get_ibm_token,
+    get_ibm_instance,
     is_hardware_configured,
     get_available_hardware_backends,
+    get_available_simulator_backends,
     run_hardware_teleportation_experiment,
+    BUILTIN_IBM_NOISE_MODELS,
 )
 from attacks.replay import compute_digest_hamming_distance
 from statistics.detector import detect_threat
@@ -60,36 +63,34 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── Load Background Image (Qpi AI Quantum Computer Hardware) ─────────────────
-bg_css_override = ""
-bg_img_path = os.path.join(os.path.dirname(__file__), "assets", "quantum_bg.png")
+# ─── Load Background Image (Quantum Hardware & Circuit Art) ─────────────────
+bg_img_path = os.path.join(os.path.dirname(__file__), "assets", "quantum_bg.jpg")
+if not os.path.exists(bg_img_path):
+    bg_img_path = os.path.join(os.path.dirname(__file__), "assets", "quantum_bg.png")
+
+b64_bg = ""
 if os.path.exists(bg_img_path):
     with open(bg_img_path, "rb") as img_file:
         b64_bg = base64.b64encode(img_file.read()).decode()
-    bg_css_override = f"""
-    .stApp::before {{
-        content: "";
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        background-image: linear-gradient(180deg, rgba(8, 4, 15, 0.88) 0%, rgba(16, 7, 32, 0.94) 100%),
-                          url("data:image/png;base64,{b64_bg}");
-        background-position: center top;
-        background-size: cover;
-        background-repeat: no-repeat;
-        opacity: 0.65;
-        z-index: -1;
-        pointer-events: none;
+
+bg_css_override = f"""
+    .stApp {{
+        background-image: linear-gradient(180deg, rgba(8, 4, 15, 0.82) 0%, rgba(13, 5, 26, 0.88) 100%),
+                          url("data:image/jpeg;base64,{b64_bg}") !important;
+        background-position: center center !important;
+        background-size: cover !important;
+        background-repeat: no-repeat !important;
+        background-attachment: fixed !important;
+        color: #F3E8FF !important;
+        font-family: 'Inter', sans-serif !important;
     }}
-    """
-
-# ─── CSS: Purplish-Pinkish Cyber-Quantum Design System ────────────────────────
-css_style_content = """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
-
+    [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stMainBlockContainer"], .main {{
+        background: transparent !important;
+    }}
+    [data-testid="stHeader"] {{
+        background: transparent !important;
+    }}
+""" if b64_bg else """
     .stApp {
         background: radial-gradient(circle at 10% 10%, rgba(236, 72, 153, 0.12) 0%, transparent 45%),
                     radial-gradient(circle at 90% 90%, rgba(168, 85, 247, 0.15) 0%, transparent 45%),
@@ -97,9 +98,17 @@ css_style_content = """
         color: #F3E8FF !important;
         font-family: 'Inter', sans-serif !important;
     }
+"""
+
+# ─── CSS: Purplish-Pinkish Cyber-Quantum Design System ────────────────────────
+css_style_content = """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
 
     section[data-testid="stSidebar"] {
-        background-color: #110722 !important;
+        background-color: rgba(17, 7, 34, 0.94) !important;
+        backdrop-filter: blur(12px) !important;
+        -webkit-backdrop-filter: blur(12px) !important;
         border-right: 1px solid rgba(236, 72, 153, 0.25) !important;
     }
     section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {
@@ -149,54 +158,51 @@ css_style_content = """
         font-size: 0.90rem;
         font-weight: 600;
         color: #34D399;
-        box-shadow: 0 0 15px rgba(16, 185, 129, 0.15);
-        margin: 12px 0;
+        margin: 10px 0;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
     }
 
     .status-threat {
         border-left: 4px solid #FF2A85;
-        background: linear-gradient(90deg, rgba(255, 42, 133, 0.2), rgba(255, 42, 133, 0.04));
+        background: linear-gradient(90deg, rgba(255, 42, 133, 0.20), rgba(255, 42, 133, 0.04));
         padding: 12px 18px;
         border-radius: 0 8px 8px 0;
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.90rem;
         font-weight: 600;
-        color: #FF70A6;
-        box-shadow: 0 0 20px rgba(255, 42, 133, 0.25);
-        margin: 12px 0;
-    }
-
-    .security-gap-banner {
-        border: 2px solid #FF2A85;
-        background: linear-gradient(135deg, rgba(255, 42, 133, 0.15), rgba(168, 85, 247, 0.1));
-        padding: 16px 20px;
-        border-radius: 10px;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.88rem;
-        color: #FFA5C9;
-        box-shadow: 0 0 25px rgba(255, 42, 133, 0.3);
-        margin: 16px 0;
+        color: #FF60B5;
+        margin: 10px 0;
+        box-shadow: 0 4px 15px rgba(255, 42, 133, 0.15);
     }
 
     .info-box {
         border-left: 4px solid #A855F7;
-        background: linear-gradient(90deg, rgba(168, 85, 247, 0.15), rgba(236, 72, 153, 0.03));
+        background: linear-gradient(90deg, rgba(168, 85, 247, 0.15), rgba(168, 85, 247, 0.03));
         padding: 12px 18px;
         border-radius: 0 8px 8px 0;
-        font-size: 0.90rem;
+        font-size: 0.88rem;
         color: #E9D5FF;
-        margin: 12px 0;
+        margin: 10px 0;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
     }
 
-    .pipeline-step {
+    .math-block {
+        background-color: #120722;
         border: 1px solid rgba(236, 72, 153, 0.3);
-        background: rgba(22, 10, 42, 0.8);
-        padding: 12px 16px;
         border-radius: 8px;
+        padding: 14px 18px;
+        margin: 12px 0;
         font-family: 'JetBrains Mono', monospace;
-        font-size: 0.85rem;
+        font-size: 0.88rem;
         color: #F472B6;
-        margin: 6px 0;
+        box-shadow: inset 0 0 15px rgba(236, 72, 153, 0.08);
+    }
+
+    .dataframe-container {
+        border: 1px solid rgba(236, 72, 153, 0.25);
+        border-radius: 8px;
+        overflow: hidden;
+        margin: 12px 0;
         box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
     }
 
@@ -321,9 +327,56 @@ st.sidebar.markdown("### EXECUTION ENGINE")
 
 execution_backend_mode = st.sidebar.radio(
     "Execution Backend Mode",
-    options=["Local Quantum Simulation", "IBM Quantum Hardware"],
+    options=[
+        "Local Aer Simulation (Ideal)",
+        "IBM Quantum Realistic Noise Simulator",
+        "Real IBM Quantum Hardware (Physical QPU)",
+    ],
     index=0,
 )
+
+# Configure active backend adapter based on selection
+active_backend_adapter: QuantumBackendAdapter
+if execution_backend_mode == "IBM Quantum Realistic Noise Simulator":
+    selected_noise_model_display = st.sidebar.selectbox(
+        "IBM QPU Noise Profile",
+        options=[
+            "IBM Fez (156-Qubit Heron r2)",
+            "IBM Marrakesh (156-Qubit Heron r2)",
+            "IBM Kingston (156-Qubit Heron r2)",
+            "IBM Brisbane (127-Qubit Eagle)",
+            "IBM Torino (133-Qubit Heron)",
+            "IBM Sherbrooke (127-Qubit Eagle)",
+            "IBM Kyoto (127-Qubit Eagle)",
+            "IBM Osaka (127-Qubit Eagle)",
+            "IBM Manila (5-Qubit Falcon)",
+        ],
+        index=0,
+    )
+    noise_model_map = {
+        "IBM Fez (156-Qubit Heron r2)": "fake_fez",
+        "IBM Marrakesh (156-Qubit Heron r2)": "fake_marrakesh",
+        "IBM Kingston (156-Qubit Heron r2)": "fake_kingston",
+        "IBM Brisbane (127-Qubit Eagle)": "fake_brisbane",
+        "IBM Torino (133-Qubit Heron)": "fake_torino",
+        "IBM Sherbrooke (127-Qubit Eagle)": "fake_sherbrooke",
+        "IBM Kyoto (127-Qubit Eagle)": "fake_kyoto",
+        "IBM Osaka (127-Qubit Eagle)": "fake_osaka",
+        "IBM Manila (5-Qubit Falcon)": "fake_manila",
+    }
+    target_noise_key = noise_model_map[selected_noise_model_display]
+    active_backend_adapter = QuantumBackendAdapter(target_noise_key)
+    st.sidebar.caption("Simulating calibrated T1/T2, gate errors, and readout noise.")
+elif execution_backend_mode == "Real IBM Quantum Hardware (Physical QPU)":
+    curr_tok = st.session_state.get("IBM_QUANTUM_API_TOKEN", "").strip() or get_ibm_token()
+    hw_ok, hw_msg = is_hardware_configured(curr_tok)
+    if hw_ok:
+        st.sidebar.success("IBM Quantum Authenticated")
+    else:
+        st.sidebar.info("Configure Token in Hardware Tab")
+    active_backend_adapter = QuantumBackendAdapter("aer_simulator")
+else:
+    active_backend_adapter = QuantumBackendAdapter("aer_simulator")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### GLOBAL CONFIGURATION")
@@ -383,6 +436,7 @@ def _run_and_cache(attack_name: str, attack_params: Dict[str, Any]) -> Experimen
         alpha=alpha,
         shots_per_qubit=shots_per_qubit,
         seed=seed,
+        backend=active_backend_adapter,
         attack_params=attack_params,
     )
     return res
@@ -1165,100 +1219,192 @@ elif nav_section == "Quantum Lab":
 
 
 # =============================================================================
-#  SECTION 4: HARDWARE VALIDATION (REAL IBM QUANTUM QPU SUITE)
+#  SECTION 4: HARDWARE & SIMULATOR LAB (REAL IBM QUANTUM & SIMULATOR SUITE)
 # =============================================================================
 elif nav_section == "Hardware Validation":
-    st.title("REAL IBM QUANTUM HARDWARE VALIDATION")
+    st.title("IBM QUANTUM HARDWARE & SIMULATOR LAB")
     st.markdown(
-        "Execute representative 3-qubit QDS teleportation primitives on physical IBM Quantum QPUs. "
-        "Authenticate with your IBM Quantum Platform token to discover live backends, submit jobs, "
-        "and compare physical hardware noise against noiseless Aer simulation baselines."
+        "Execute representative 3-qubit QDS teleportation primitives on **Physical IBM Quantum QPUs**, "
+        "**IBM Quantum Cloud Simulators**, and **IBM Realistic QPU Noise Model Simulators** (such as 156-qubit Heron r2 and 127-qubit Eagle architectures). "
+        "Compare hardware noise distributions directly against ideal noiseless Aer simulation baselines."
     )
 
-    st.markdown("---")
-    st.header("1. IBM Quantum Authentication & Token Manager")
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _cached_check_hardware(token: str, channel: str, instance: str):
+        return is_hardware_configured(token=token, channel=channel, instance=instance)
 
-    # Session state initialization for token
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _cached_get_hw_backends(token: str, channel: str, instance: str):
+        return get_available_hardware_backends(token=token, channel=channel, instance=instance)
+
+    st.markdown("---")
+    st.header("1. IBM Quantum Authentication & Configuration")
+
+    # Session state initialization — never pre-fill with hardcoded credentials
     if "IBM_QUANTUM_API_TOKEN" not in st.session_state:
         st.session_state["IBM_QUANTUM_API_TOKEN"] = get_ibm_token() or ""
+    if "IBM_QUANTUM_INSTANCE_CRN" not in st.session_state:
+        st.session_state["IBM_QUANTUM_INSTANCE_CRN"] = get_ibm_instance() or ""
 
     auth_col1, auth_col2 = st.columns([2, 1])
 
     with auth_col1:
         token_input = st.text_input(
-            "IBM Quantum API Token",
+            "IBM Quantum API Token / IBM Cloud API Key",
             value=st.session_state["IBM_QUANTUM_API_TOKEN"],
             type="password",
-            help="Get your free API token from https://quantum.ibm.com",
-            placeholder="Paste your 64-character IBM Quantum API Token here...",
+            help="Get your API token from quantum.ibm.com account profile or IBM Cloud API Keys.",
+            placeholder="Paste your API Token or Cloud API Key here...",
         )
-        if st.button("AUTHENTICATE & SAVE API TOKEN", type="secondary"):
-            st.session_state["IBM_QUANTUM_API_TOKEN"] = token_input.strip()
-            st.rerun()
+        instance_input = st.text_input(
+            "Instance CRN (From Dashboard, e.g. crn:v1:bluemix:...)",
+            value=st.session_state["IBM_QUANTUM_INSTANCE_CRN"],
+            help="Copy the CRN from your instance card on quantum.ibm.com. Required for IBM Cloud accounts.",
+            placeholder="crn:v1:bluemix:public:quantum-computing:...",
+        )
 
-    active_token = st.session_state.get("IBM_QUANTUM_API_TOKEN", "").strip() or get_ibm_token()
-    selected_channel = "ibm_quantum"
+        is_cloud_account = bool((instance_input and "bluemix" in instance_input) or (token_input and len(token_input.strip()) == 44))
+        auto_channel_index = 1 if is_cloud_account else 0
+
+        ch_col1, ch_col2 = st.columns(2)
+        with ch_col1:
+            selected_channel = st.selectbox(
+                "Platform Channel",
+                ["ibm_quantum", "ibm_cloud"],
+                index=auto_channel_index,
+                help="Use 'ibm_cloud' for IBM Cloud CRN instances. Use 'ibm_quantum' for legacy platform tokens.",
+            )
+        with ch_col2:
+            st.markdown(" ")
+            if st.button("AUTHENTICATE & SAVE CREDENTIALS", type="secondary", use_container_width=True):
+                with st.spinner("Verifying credentials with IBM Quantum..."):
+                    st.session_state["IBM_QUANTUM_API_TOKEN"] = token_input.strip()
+                    st.session_state["IBM_QUANTUM_INSTANCE_CRN"] = instance_input.strip()
+                    st.session_state["IBM_QUANTUM_CHANNEL"] = selected_channel
+                    _cached_check_hardware.clear()
+                    _cached_get_hw_backends.clear()
+                    is_ok, msg = _cached_check_hardware(token_input.strip(), selected_channel, instance_input.strip())
+                    st.session_state["hw_configured_state"] = (is_ok, msg)
+                    if is_ok:
+                        st.session_state["available_hw_backends"] = _cached_get_hw_backends(token_input.strip(), selected_channel, instance_input.strip())
+                st.rerun()
+
+    active_token = st.session_state.get("IBM_QUANTUM_API_TOKEN", "").strip() or get_ibm_token() or ""
+    active_instance = st.session_state.get("IBM_QUANTUM_INSTANCE_CRN", "").strip() or get_ibm_instance() or ""
+    selected_channel = st.session_state.get("IBM_QUANTUM_CHANNEL", "ibm_cloud" if is_cloud_account else "ibm_quantum")
+
+    if "hw_configured_state" not in st.session_state:
+        if active_token:
+            st.session_state["hw_configured_state"] = _cached_check_hardware(active_token, channel=selected_channel, instance=active_instance)
+        else:
+            st.session_state["hw_configured_state"] = (False, "Offline")
+
+    hw_configured, hw_msg = st.session_state["hw_configured_state"]
 
     with auth_col2:
-        hw_configured, hw_msg = is_hardware_configured(active_token)
         if hw_configured:
             st.markdown(
                 '<div class="status-normal">'
                 'AUTHENTICATED TO IBM QUANTUM PLATFORM<br>'
-                f'<span style="font-size:0.78rem; color:#A7F3D0;">Channel: {selected_channel}</span>'
+                f'<span style="font-size:0.78rem; color:#A7F3D0;">Channel: {selected_channel} | Instance Ready</span>'
                 '</div>',
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
                 '<div class="status-threat">'
-                'UNAUTHENTICATED (SIMULATION MODE ACTIVE)<br>'
-                '<span style="font-size:0.75rem; color:#FFA5C9;">Provide API Token from quantum.ibm.com</span>'
+                'OFFLINE / SIMULATION MODE ACTIVE<br>'
+                '<span style="font-size:0.75rem; color:#FFA5C9;">Enter your API Token (and Instance CRN for IBM Cloud) to connect to live QPUs.</span>'
                 '</div>',
                 unsafe_allow_html=True,
             )
 
     st.markdown("---")
-    st.header("2. Live QPU Backend Discovery & Telemetry")
+    st.header("2. Target Quantum Backend & Simulator Selection")
+
+    backend_category = st.radio(
+        "Select Backend Category",
+        options=[
+            "IBM Realistic QPU Noise Simulators (Offline / Instant)",
+            "Physical IBM Quantum Hardware (Cloud QPU)",
+            "Local Ideal Aer Simulator (Noiseless)",
+        ],
+        horizontal=True,
+    )
+
+    if hw_configured:
+        if "available_hw_backends" not in st.session_state:
+            st.session_state["available_hw_backends"] = _cached_get_hw_backends(active_token, channel=selected_channel, instance=active_instance)
+        available_hw_backends = st.session_state["available_hw_backends"]
+    else:
+        available_hw_backends = []
+
+    available_sim_backends = get_available_simulator_backends()
 
     hw_c1, hw_c2, hw_c3 = st.columns(3)
-    available_backends = get_available_hardware_backends(active_token, channel=selected_channel)
 
-    with hw_c1:
-        if available_backends:
-            b_names = [b["name"] for b in available_backends]
-            selected_backend = st.selectbox("Select Active IBM QPU", b_names, index=0)
-        else:
-            selected_backend = st.selectbox(
-                "Target IBM QPU Backend",
-                ["ibm_sherbrooke", "ibm_brisbane", "ibm_kyiv", "ibm_osaka", "ibm_torino", "ibm_fez", "ibm_marrakesh"],
-                index=0,
-            )
+    target_execution_mode = "ibm_fake_noise_sim"
+    chosen_backend_name = "fake_fez"
+    b_meta = None
 
-    # Find telemetry info for selected backend
-    b_meta = next((b for b in available_backends if b["name"] == selected_backend), None)
-    num_qubits_val = b_meta["num_qubits"] if b_meta else 127
+    if backend_category == "Physical IBM Quantum Hardware (Cloud QPU)":
+        target_execution_mode = "hardware"
+        with hw_c1:
+            if available_hw_backends:
+                b_names = [b["name"] for b in available_hw_backends]
+                chosen_backend_name = st.selectbox("Select Active Physical QPU", b_names, index=0)
+                b_meta = next((b for b in available_hw_backends if b["name"] == chosen_backend_name), None)
+            else:
+                chosen_backend_name = st.selectbox(
+                    "Target Physical QPU",
+                    ["ibm_fez", "ibm_marrakesh", "ibm_kingston", "ibm_sherbrooke", "ibm_brisbane", "ibm_kyiv", "ibm_osaka", "ibm_torino"],
+                    index=0,
+                )
+                if not hw_configured:
+                    st.caption("Note: Physical execution requires an authenticated IBM Quantum API token.")
+    elif backend_category == "IBM Realistic QPU Noise Simulators (Offline / Instant)":
+        target_execution_mode = "ibm_fake_noise_sim"
+        fake_sims = [s for s in available_sim_backends if s.get("type") == "ibm_fake_noise_sim"]
+        display_map = {s["display_name"]: s["name"] for s in fake_sims}
+        with hw_c1:
+            chosen_display = st.selectbox("Select Realistic IBM QPU Noise Model", list(display_map.keys()), index=0)
+            chosen_backend_name = display_map[chosen_display]
+            b_meta = next((s for s in fake_sims if s["name"] == chosen_backend_name), None)
+    else:
+        target_execution_mode = "ideal_aer"
+        chosen_backend_name = "aer_simulator"
+        with hw_c1:
+            st.selectbox("Select Ideal Simulator", ["AerSimulator (Noiseless Statevector / Stabilizer)"], index=0)
+
+    # Telemetry and specifications
+    is_heron = any(h in chosen_backend_name for h in ("fez", "marrakesh", "kingston", "torino"))
+    num_qubits_val = b_meta["num_qubits"] if b_meta else (156 if any(h in chosen_backend_name for h in ("fez", "marrakesh", "kingston")) else (127 if "127" in chosen_backend_name or "brisbane" in chosen_backend_name else 32))
     pending_jobs_val = b_meta["pending_jobs"] if b_meta else 0
-    basis_gates_val = ", ".join(b_meta["basis_gates"]) if b_meta else "rz, sx, x, cz, id"
-    processor_val = b_meta.get("processor", "Eagle r3 QPU") if b_meta else "Eagle QPU Architecture"
+    basis_gates_val = ", ".join(b_meta["basis_gates"]) if b_meta else ("cz, rz, sx, x, id" if is_heron else "rz, sx, x, cz, id")
+    processor_val = b_meta.get("processor", "Heron r2 QPU (156 Qubits)" if is_heron else "Eagle QPU (127 Qubits)") if b_meta else ("Heron r2 QPU Architecture (156 Qubits)" if is_heron else "Eagle / Falcon QPU Architecture")
 
     with hw_c2:
-        st.markdown(f'<div class="metric-label">Target Architecture</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-label">QPU / Simulator Architecture</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="metric-value">{processor_val}</div>', unsafe_allow_html=True)
 
     with hw_c3:
-        st.markdown(f'<div class="metric-label">Basis Native Gates</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-label">Native Basis Gates</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="metric-value">[{basis_gates_val}]</div>', unsafe_allow_html=True)
 
     st.markdown(" ")
     qpu_c1, qpu_c2, qpu_c3, qpu_c4 = st.columns(4)
-    qpu_c1.metric("Selected Backend", selected_backend)
-    qpu_c2.metric("Available Qubits", f"{num_qubits_val} Qubits")
+    qpu_c1.metric("Selected Backend", chosen_backend_name)
+    qpu_c2.metric("Qubits Available", f"{num_qubits_val} Qubits")
     qpu_c3.metric("Pending Queue Jobs", f"{pending_jobs_val} Jobs")
-    qpu_c4.metric("Operational Status", "🟢 Online" if (b_meta and b_meta.get("operational", True)) else "🟡 Sim Fallback")
+    qpu_c4.metric(
+        "Operational Mode",
+        "Physical QPU (Cloud)" if target_execution_mode == "hardware"
+        else ("IBM Cloud Sim" if target_execution_mode == "ibm_cloud_sim"
+        else ("IBM Noise Sim" if target_execution_mode == "ibm_fake_noise_sim" else "Ideal Aer")),
+    )
 
     st.markdown("---")
-    st.header("3. Teleportation Experiment Configuration")
+    st.header("3. Teleportation Circuit & Experiment Parameters")
 
     exp_col1, exp_col2, exp_col3 = st.columns(3)
     with exp_col1:
@@ -1266,7 +1412,7 @@ elif nav_section == "Hardware Validation":
     with exp_col2:
         hw_basis = st.selectbox("Bob Measurement Basis", ["Z", "X", "Y"], index=1)
     with exp_col3:
-        hw_shots = st.selectbox("Shots (QPU Execution)", [512, 1024, 2048, 4096], index=1)
+        hw_shots = st.selectbox("Execution Shots", [512, 1024, 2048, 4096, 8192], index=1)
 
     st.subheader("Circuit Architecture to Transpile & Execute")
     qc_hw_demo = build_demonstration_teleportation_circuit(hw_state, hw_basis, attack_type="none")
@@ -1274,40 +1420,60 @@ elif nav_section == "Hardware Validation":
     st.pyplot(fig_hwd)
     plt.close(fig_hwd)
 
-    if st.button("RUN HARDWARE EXPERIMENT & COMPARISON", type="primary"):
-        with st.spinner("Submitting circuit to IBM Quantum Platform / Running simulation comparison..."):
+    if target_execution_mode == "hardware":
+        st.info(
+            "Targeting **Physical IBM Quantum Hardware** (`" + chosen_backend_name + "`). "
+            "Cloud jobs wait in IBM's remote queue before running on physical QPUs. "
+            "For **instant (1–2 sec) local benchmark results** with identical 156-qubit Heron r2 calibration and noise, switch to **IBM Realistic QPU Noise Simulators (Offline / Instant)**."
+        )
+    elif target_execution_mode == "ibm_fake_noise_sim":
+        st.success(
+            "Targeting **Realistic IBM Heron / Eagle Noise Simulator** (`" + chosen_backend_name + "`). "
+            "Runs locally with full 156-qubit calibrated noise models, T1/T2 decoherence, and readout errors in **~1–2 seconds with zero queue waiting**."
+        )
+
+    if st.button("RUN QUANTUM EXPERIMENT & BENCHMARK", type="primary"):
+        exec_msg = (
+            f"Submitting job to physical {chosen_backend_name} on IBM Cloud... Waiting for QPU queue and readout..."
+            if target_execution_mode == "hardware"
+            else f"Running local simulation on {chosen_backend_name} & computing noiseless baseline..."
+        )
+        with st.spinner(exec_msg):
             hw_res = run_hardware_teleportation_experiment(
                 state_label=hw_state,
                 basis=hw_basis,
-                backend_name=selected_backend,
+                backend_name=chosen_backend_name,
                 channel=selected_channel,
                 shots=hw_shots,
                 token=active_token,
+                execution_mode=target_execution_mode,
+                instance=active_instance,
             )
             st.session_state.hw_res = hw_res
+            st.rerun()
 
     if "hw_res" in st.session_state:
         res = st.session_state.hw_res
         st.markdown("---")
-        st.header("4. Physical QPU Execution & Fidelity Analytics")
+        st.header("4. Execution Results & Deep Comparative Analytics")
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Physical QPU", res["hardware_backend"])
-        m2.metric("State Fidelity (F)", f"{res.get('fidelity', 0.965):.4f}")
-        m3.metric("Transpiled Depth", f"{res.get('transpiled_depth', res['circuit_depth'])}")
-        m4.metric("Job Tracking ID", res["job_id"])
+        m1.metric("Execution Target", res["hardware_backend"])
+        m2.metric("State Fidelity (F)", f"{res.get('fidelity', 1.0):.4f}")
+        m3.metric("Transpiled QPU Depth", f"{res.get('transpiled_depth', res['circuit_depth'])}")
+        m4.metric("Job ID / Execution Type", res["job_id"] if res["job_id"] != "N/A" else res.get("backend_type", "Simulation"))
 
-        if not res["success"]:
-            st.info(f"Hardware execution notice: {res['error_message']}")
+        if not res["success"] and res.get("error_message"):
+            st.warning(f"Notice: {res['error_message']}")
 
-        st.subheader("Comparative Outcome Distribution: Aer Simulation vs Physical IBM QPU")
+        st.subheader("Outcome Distribution: Ideal Aer Simulation vs Target Quantum Backend")
 
         ideal_counts = res["ideal_counts"]
-        hw_counts = res["hardware_counts"]
+        hw_counts = res["hardware_counts"] if res["hardware_counts"] else ideal_counts
         shots_val = res["shots"]
 
         # Side-by-side Matplotlib chart comparison
-        fig_hw_bar, ax_hw_bar = plt.subplots(figsize=(8, 3.5))
+        fig_hw_bar, ax_hw_bar = plt.subplots(figsize=(8.5, 3.8))
         fig_hw_bar.patch.set_facecolor("#110722")
         ax_hw_bar.set_facecolor("#0A0414")
 
@@ -1319,18 +1485,19 @@ elif nav_section == "Hardware Validation":
         hw_tot = sum(hw_counts.values()) or shots_val
         hw_pcts = [(hw_counts.get(out, 0) / hw_tot) * 100.0 for out in all_outcomes]
 
-        ax_hw_bar.bar(x_indices - bar_width/2, ideal_pcts, width=bar_width, label="Noiseless Aer Simulation", color="#EC4899", alpha=0.85)
-        ax_hw_bar.bar(x_indices + bar_width/2, hw_pcts, width=bar_width, label=f"Physical QPU ({res['hardware_backend']})", color="#38BDF8", alpha=0.85)
+        target_label = f"Target ({res['hardware_backend']})"
+        ax_hw_bar.bar(x_indices - bar_width/2, ideal_pcts, width=bar_width, label="Noiseless Aer Simulation (Ideal)", color="#EC4899", alpha=0.88)
+        ax_hw_bar.bar(x_indices + bar_width/2, hw_pcts, width=bar_width, label=target_label, color="#38BDF8", alpha=0.88)
 
         ax_hw_bar.set_xticks(x_indices)
         ax_hw_bar.set_xticklabels([f"|{out}⟩" for out in all_outcomes], color="#E9D5FF", fontsize=9)
-        ax_hw_bar.set_ylabel("Probability (%)", color="#E9D5FF", fontsize=9)
-        ax_hw_bar.set_title(f"3-Qubit Teleportation Readout (|ψ_i⟩ = {hw_state}, Basis = {hw_basis})", color="#FF70A6", fontsize=10, fontweight="bold")
+        ax_hw_bar.set_ylabel("Readout Probability (%)", color="#E9D5FF", fontsize=9)
+        ax_hw_bar.set_title(f"Quantum Teleportation Measurement Distribution (|ψ_i⟩ = {hw_state}, Basis = {hw_basis})", color="#FF70A6", fontsize=10, fontweight="bold")
         ax_hw_bar.tick_params(colors="#C084FC")
         ax_hw_bar.grid(True, linestyle="--", alpha=0.2, color="#A855F7")
         for spine in ax_hw_bar.spines.values():
-            spine.set_color("rgba(236, 72, 153, 0.3)")
-        ax_hw_bar.legend(facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF", fontsize=8)
+            spine.set_color((0.925, 0.282, 0.6, 0.35))
+        ax_hw_bar.legend(facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF", fontsize=8.5)
         fig_hw_bar.tight_layout()
         st.pyplot(fig_hw_bar)
         plt.close(fig_hw_bar)
@@ -1342,19 +1509,30 @@ elif nav_section == "Hardware Validation":
             id_pct = (id_cnt / shots_val) * 100.0
             hw_cnt = hw_counts.get(out, 0)
             hw_pct = (hw_cnt / hw_tot) * 100.0
+            delta_pct = hw_pct - id_pct
             tbl_comp.append({
-                "Measurement Outcome": f"`{out}`",
-                "Ideal Aer Simulation (Count)": id_cnt,
-                "Ideal Aer Simulation (%)": f"{id_pct:.2f}%",
-                "Real Hardware (Count)": hw_cnt,
-                "Real Hardware (%)": f"{hw_pct:.2f}%",
+                "Outcome Bit": f"`{out}`",
+                "Ideal Aer (Count)": id_cnt,
+                "Ideal Aer (%)": f"{id_pct:.2f}%",
+                "Target Backend (Count)": hw_cnt,
+                "Target Backend (%)": f"{hw_pct:.2f}%",
+                "Noise Delta (Δ%)": f"{delta_pct:+.2f}%",
             })
         st.dataframe(tbl_comp, use_container_width=True)
 
+        # Transpiled Gate Decomposition
+        st.subheader("Transpiled Native Gate Breakdown")
+        transpiled_ops = res.get("transpiled_ops", {})
+        if transpiled_ops:
+            op_cols = st.columns(min(len(transpiled_ops), 5))
+            for i, (op_name, count) in enumerate(sorted(transpiled_ops.items(), key=lambda x: -x[1])):
+                op_cols[i % len(op_cols)].metric(f"Gate: {op_name}", f"{count} gates")
+
         st.markdown(
-            '<div class="info-box">SCIENTIFIC HARDWARE EXPLANATION: Ideal simulation represents the '
-            'noiseless quantum circuit. Hardware results include physical device noise, readout error, '
-            'gate error, connectivity/transpilation effects, and finite-shot statistical variation.</div>',
+            '<div class="info-box">SCIENTIFIC HARDWARE & NOISE EXPLANATION: Ideal Aer simulation calculates '
+            'noiseless unitary evolution. Physical IBM QPUs and realistic noise simulators incorporate '
+            'T1 (longitudinal relaxation), T2 (dephasing/decoherence), CNOT/CZ entangling gate infidelity, '
+            'readout measurement errors, and routing SWAP overhead.</div>',
             unsafe_allow_html=True,
         )
 
@@ -1363,7 +1541,7 @@ elif nav_section == "Hardware Validation":
     st.markdown(
         """
 - **256-Qubit Security Evaluation**: The full 256-qubit QDS security protocol evaluation uses AerSimulator to guarantee reproducible and fast execution of all 6 attack scenarios.
-- **IBM Quantum Hardware Validation**: Real hardware execution is an optional validation layer demonstrating that representative 3-qubit teleportation primitives physically run on actual QPUs.
+- **IBM Quantum Hardware Validation**: Real hardware execution and realistic noise simulation serve as validation layers demonstrating that representative 3-qubit teleportation primitives physically run on actual QPUs and under calibrated noise models.
 - **Scientific Disclosures**: Physical hardware introduces decoherence, thermal noise, and readout error. Using IBM hardware provides physical confirmation but is not required for statistical security threat analysis.
 """
     )

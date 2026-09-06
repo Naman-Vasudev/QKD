@@ -86,6 +86,47 @@ class TestHardwareIntegration(unittest.TestCase):
         self.assertFalse(res["success"])
         self.assertIn("Hardware execution error", res["error_message"])
 
+    def test_simulator_backends_discovery(self):
+        """Verify simulator backends returns catalog of realistic noise models."""
+        from core.hardware import get_available_simulator_backends
+        sims = get_available_simulator_backends()
+        self.assertGreater(len(sims), 0)
+        sim_names = [s["name"] for s in sims]
+        self.assertIn("fake_brisbane", sim_names)
+        self.assertIn("fake_torino", sim_names)
+
+    def test_fake_noise_simulation_execution(self):
+        """Verify experiment runs with realistic noise simulation and returns valid fidelity."""
+        res = run_hardware_teleportation_experiment(
+            state_label="|+>",
+            basis="X",
+            backend_name="fake_brisbane",
+            shots=256,
+            execution_mode="ibm_fake_noise_sim",
+        )
+        self.assertTrue(res["success"])
+        self.assertEqual(res["backend_type"], "IBM Realistic Noise Model Simulator")
+        self.assertIn("ideal_counts", res)
+        self.assertIn("hardware_counts", res)
+        self.assertGreater(res["fidelity"], 0.0)
+        self.assertLessEqual(res["fidelity"], 1.0)
+        self.assertGreater(res["transpiled_depth"], 0)
+
+    def test_quantum_backend_adapter_noise_model(self):
+        """Verify QuantumBackendAdapter supports realistic IBM noise models."""
+        from core.backend import QuantumBackendAdapter
+        from qiskit import QuantumCircuit
+        adapter = QuantumBackendAdapter("fake_brisbane")
+        self.assertTrue(adapter.is_noisy)
+        meta = adapter.get_backend_metadata()
+        self.assertEqual(meta["num_qubits"], 127)
+
+        qc = QuantumCircuit(1, 1)
+        qc.x(0)
+        qc.measure(0, 0)
+        res = adapter.run_circuit(qc, shots=50)
+        self.assertIn("1", res["counts"])
+
     def test_no_hardcoded_credentials_in_module(self):
         """Audit hardware.py source code to confirm no hardcoded API tokens exist."""
         import core.hardware as hw_mod
