@@ -474,7 +474,7 @@ def _plot_pmf(n: int, p0: float, k_obs: int, alpha_val: float) -> plt.Figure:
     ax.grid(True, linestyle="--", alpha=0.2, color="#A855F7")
     ax.tick_params(colors="#C084FC")
     for spine in ax.spines.values():
-        spine.set_color("rgba(236, 72, 153, 0.3)")
+        spine.set_color((236/255, 72/255, 153/255, 0.3))
     ax.legend(fontsize=8, facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF")
     fig.tight_layout()
     return fig
@@ -1108,7 +1108,7 @@ elif nav_section == "Quantum Lab":
             ax_h.grid(True, axis="y", linestyle="--", alpha=0.2, color="#A855F7")
             ax_h.tick_params(colors="#C084FC")
             for spine in ax_h.spines.values():
-                spine.set_color("rgba(236, 72, 153, 0.3)")
+                spine.set_color((236/255, 72/255, 153/255, 0.3))
             fig_h.tight_layout()
             st.pyplot(fig_h)
             plt.close(fig_h)
@@ -1281,13 +1281,18 @@ elif nav_section == "Hardware Validation":
                     st.session_state["IBM_QUANTUM_API_TOKEN"] = token_input.strip()
                     st.session_state["IBM_QUANTUM_INSTANCE_CRN"] = instance_input.strip()
                     st.session_state["IBM_QUANTUM_CHANNEL"] = selected_channel
+                    # Clear all caches: Streamlit cache_data AND module-level IBM service/backend caches
                     _cached_check_hardware.clear()
                     _cached_get_hw_backends.clear()
+                    from core.hardware import _SERVICE_CACHE, _BACKENDS_CACHE
+                    _SERVICE_CACHE.clear()
+                    _BACKENDS_CACHE.clear()
                     is_ok, msg = _cached_check_hardware(token_input.strip(), selected_channel, instance_input.strip())
                     st.session_state["hw_configured_state"] = (is_ok, msg)
                     if is_ok:
                         st.session_state["available_hw_backends"] = _cached_get_hw_backends(token_input.strip(), selected_channel, instance_input.strip())
                 st.rerun()
+
 
     active_token = st.session_state.get("IBM_QUANTUM_API_TOKEN", "").strip() or get_ibm_token() or ""
     active_instance = st.session_state.get("IBM_QUANTUM_INSTANCE_CRN", "").strip() or get_ibm_instance() or ""
@@ -1464,7 +1469,13 @@ elif nav_section == "Hardware Validation":
         m4.metric("Job ID / Execution Type", res["job_id"] if res["job_id"] != "N/A" else res.get("backend_type", "Simulation"))
 
         if not res["success"] and res.get("error_message"):
-            st.warning(f"Notice: {res['error_message']}")
+            st.error(
+                f"**Hardware Execution Failed** — The job did NOT run on the physical QPU.\n\n"
+                f"**Reason:** {res['error_message']}\n\n"
+                f"Results shown below are the **ideal local simulation only** (not hardware)."
+            )
+            st.stop()
+
 
         st.subheader("Outcome Distribution: Ideal Aer Simulation vs Target Quantum Backend")
 
@@ -2074,7 +2085,7 @@ elif nav_section == "Analysis":
                 ax_.grid(True, linestyle="--", alpha=0.2, color="#A855F7")
                 ax_.tick_params(colors="#C084FC")
                 for spine in ax_.spines.values():
-                    spine.set_color("rgba(236, 72, 153, 0.3)")
+                    spine.set_color((236/255, 72/255, 153/255, 0.3))
                 ax_.legend(fontsize=8, facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF")
 
             axes_bw[0].set_ylabel("Verification Error Rate", color="#E9D5FF")

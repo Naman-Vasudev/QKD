@@ -25,26 +25,19 @@ try:
     )
     HAS_FAKE_BACKENDS = True
     FAKE_BACKEND_MAP = {
+        # ONLY fake_* prefixed names are local noise simulators.
+        # Real ibm_* names (ibm_fez, ibm_marrakesh, etc.) must NOT be here
+        # — they must go through the IBM Cloud job submission path.
         "fake_fez": FakeFez,
-        "ibm_fez": FakeFez,
         "fake_marrakesh": FakeMarrakesh,
-        "ibm_marrakesh": FakeMarrakesh,
         "fake_kingston": FakeKingston,
-        "ibm_kingston": FakeKingston,
         "fake_brisbane": FakeBrisbane,
-        "ibm_brisbane": FakeBrisbane,
         "fake_torino": FakeTorino,
-        "ibm_torino": FakeTorino,
         "fake_kyoto": FakeKyoto,
-        "ibm_kyoto": FakeKyoto,
         "fake_sherbrooke": FakeSherbrooke,
-        "ibm_sherbrooke": FakeSherbrooke,
         "fake_osaka": FakeOsaka,
-        "ibm_osaka": FakeOsaka,
         "fake_manila": FakeManilaV2,
-        "ibm_manila": FakeManilaV2,
         "fake_nairobi": FakeNairobiV2,
-        "ibm_nairobi": FakeNairobiV2,
     }
 except ImportError:
     HAS_FAKE_BACKENDS = False

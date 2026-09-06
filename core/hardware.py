@@ -1,4 +1,4 @@
-"""
+﻿"""
 IBM Quantum Hardware & Simulator Integration Module.
 
 SCIENTIFIC INTEGRITY & DISCLOSURES:
@@ -170,14 +170,6 @@ def is_hardware_configured(
 ) -> Tuple[bool, str]:
     """
     Check if IBM Quantum hardware access is available and configured.
-
-    Args:
-        token: Optional API token override to validate.
-        channel: Optional preferred channel ('ibm_quantum' or 'ibm_cloud').
-        instance: Optional instance CRN.
-
-    Returns:
-        Tuple of (configured: bool, status_message: str)
     """
     if not HAS_IBM_RUNTIME:
         return False, "qiskit-ibm-runtime package is not installed."
@@ -235,18 +227,9 @@ def _get_runtime_service(
     token: Optional[str] = None,
     channel: str = "ibm_quantum",
     instance: Optional[str] = None,
-) -> QiskitRuntimeService:
+) -> "QiskitRuntimeService":
     """
-    Initialize QiskitRuntimeService trying specified channel and instance, falling back gracefully.
-    Caches the authenticated service to prevent redundant network delays.
-
-    Args:
-        token: IBM Quantum API token or IBM Cloud API key.
-        channel: Preferred channel name ("ibm_quantum" or "ibm_cloud").
-        instance: Optional instance CRN (e.g. crn:v1:bluemix...).
-
-    Returns:
-        Initialized QiskitRuntimeService instance.
+    Initialize QiskitRuntimeService, caching the result to prevent redundant network delays.
     """
     if not HAS_IBM_RUNTIME:
         raise ImportError("qiskit-ibm-runtime package is not installed.")
@@ -254,9 +237,7 @@ def _get_runtime_service(
     tok = token or get_ibm_token() or ""
     inst = instance or get_ibm_instance() or ""
 
-    # Smart auto-detection of channel:
-    # If instance CRN is provided (starts with crn:v1:bluemix), or token is an IBM Cloud API key (len 44),
-    # it is strictly an IBM Cloud account. Attempting ibm_quantum would cause an unnecessary 15-second network timeout.
+    # Auto-detect IBM Cloud channel
     effective_channel = channel
     if (inst and ("bluemix" in inst or "crn:" in inst)) or (tok and len(tok) == 44 and not tok.startswith("ey")):
         effective_channel = "ibm_cloud"
@@ -280,7 +261,6 @@ def _get_runtime_service(
         try:
             srv = QiskitRuntimeService(**kwargs)
             _SERVICE_CACHE[cache_key] = srv
-            # Also save account to disk cache in the background so future starts are fast
             try:
                 QiskitRuntimeService.save_account(channel=ch, token=tok, instance=inst or None, overwrite=True, set_as_default=True)
             except Exception:
@@ -288,7 +268,6 @@ def _get_runtime_service(
             return srv
         except Exception as exc:
             last_exc = exc
-            # Also try without instance if channel failed with it
             if inst:
                 try:
                     kwargs_no_inst = {"channel": ch}
@@ -300,7 +279,6 @@ def _get_runtime_service(
                 except Exception:
                     pass
 
-    # Try without explicit arguments (loads saved default account from ~/.qiskit)
     try:
         srv = QiskitRuntimeService()
         _SERVICE_CACHE[cache_key] = srv
@@ -316,14 +294,6 @@ def get_available_hardware_backends(
 ) -> List[Dict[str, Any]]:
     """
     Retrieve available physical IBM Quantum hardware backends (QPUs).
-
-    Args:
-        token: Optional API token override.
-        channel: Channel type ("ibm_quantum" or "ibm_cloud").
-        instance: Optional instance CRN.
-
-    Returns:
-        List of backend metadata dictionaries for physical QPUs.
     """
     if not HAS_IBM_RUNTIME:
         return []
@@ -353,9 +323,20 @@ def get_available_hardware_backends(
             except Exception:
                 pass
 
-            basis_gates = getattr(b.configuration(), "basis_gates", ["cz", "rz", "sx", "x", "id"]) if hasattr(b, "configuration") else ["cz", "rz", "sx", "x", "id"]
-            processor = getattr(b.configuration(), "processor_type", {}).get("family", "Heron r2 QPU") if hasattr(b, "configuration") else "Heron r2 QPU"
-            
+            basis_gates = ["cz", "rz", "sx", "x", "id"]
+            try:
+                cfg = b.configuration()
+                basis_gates = getattr(cfg, "basis_gates", basis_gates)
+            except Exception:
+                pass
+
+            processor = "Heron r2 QPU"
+            try:
+                cfg = b.configuration()
+                processor = getattr(cfg, "processor_type", {}).get("family", processor)
+            except Exception:
+                pass
+
             results.append({
                 "name": b.name,
                 "num_qubits": b.num_qubits,
@@ -381,16 +362,8 @@ def get_available_simulator_backends(
     instance: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve available IBM Quantum Simulator backends (Cloud Simulators + Realistic Noise Models).
+    Retrieve available IBM Quantum Simulator backends.
     Returns immediately from built-in high-fidelity noise models without blocking network queries.
-
-    Args:
-        token: Optional API token override.
-        channel: Channel type ("ibm_quantum" or "ibm_cloud").
-        instance: Optional instance CRN.
-
-    Returns:
-        List of simulator backend metadata dictionaries.
     """
     return list(BUILTIN_IBM_NOISE_MODELS)
 
@@ -419,18 +392,11 @@ def run_hardware_teleportation_experiment(
     Execute a 3-qubit teleportation demonstration experiment on real IBM Quantum hardware,
     an IBM Quantum Cloud Simulator, or an Offline IBM Realistic QPU Noise Model Simulator.
 
-    Args:
-        state_label: Input signature state label ('|0>', '|1>', '|+>', '|->', '|+i>', '|-i>').
-        basis: Bob verification basis ('Z', 'X', 'Y').
-        backend_name: Target backend name (e.g. 'ibm_marrakesh', 'fake_brisbane', 'fake_torino').
-        channel: Channel type ('ibm_cloud' or 'ibm_quantum').
-        shots: Number of execution shots.
-        token: Optional API token.
-        execution_mode: 'auto', 'hardware', 'ibm_cloud_sim', or 'ibm_fake_noise_sim'.
-        instance: Optional instance CRN (e.g. crn:v1:bluemix...).
-
-    Returns:
-        Dictionary containing execution metadata, hardware counts, ideal counts, fidelity, and transpile stats.
+    ROUTING LOGIC:
+    - backend_name starts with "fake_"  OR  execution_mode == "ibm_fake_noise_sim"
+      -> Local offline noise simulation (no IBM Cloud contact, instant results)
+    - backend_name starts with "ibm_"   OR  execution_mode == "hardware"
+      -> Real IBM Quantum Cloud QPU job (SamplerV2, waits in queue, consumes QPU time)
     """
     # 1. Always run ideal simulation baseline (noiseless Aer)
     qc_ideal = build_demonstration_teleportation_circuit(state_label, basis, attack_type="none")
@@ -438,7 +404,6 @@ def run_hardware_teleportation_experiment(
     sim_res = sim_backend.run_circuit(qc_ideal, shots=shots, seed_simulator=42)
     ideal_counts = _extract_bob_counts(sim_res["counts"])
 
-    # Compute ideal probabilities
     tot_sim = sum(ideal_counts.values()) or shots
     ideal_probs = {k: v / tot_sim for k, v in ideal_counts.items()}
 
@@ -465,7 +430,9 @@ def run_hardware_teleportation_experiment(
         "fidelity": 1.0,
     }
 
-    # 2. Check if target is an IBM Fake Noise Model Simulator
+    # 2. Route: local fake noise simulator (fake_* prefix only)
+    #    IMPORTANT: real ibm_* names are NOT in FAKE_BACKEND_MAP anymore —
+    #    they go through the IBM Cloud path below.
     is_fake_noise = (
         execution_mode == "ibm_fake_noise_sim"
         or b_name.lower().startswith("fake_")
@@ -485,7 +452,6 @@ def run_hardware_teleportation_experiment(
             bhatt = sum(np.sqrt(ideal_probs.get(k, 0.0) * hw_probs.get(k, 0.0)) for k in all_keys)
             fidelity = float(bhatt ** 2)
 
-            # Transpile circuit to get exact QPU depth and gate breakdown
             target_dev = fake_adapter._target_device
             tqc = transpile(qc_ideal, target_dev, optimization_level=1) if target_dev else qc_ideal
 
@@ -503,7 +469,7 @@ def run_hardware_teleportation_experiment(
             result_dict["error_message"] = f"Noise simulation error: {str(exc)}"
             return result_dict
 
-    # 3. If Real Hardware or Cloud Simulator is requested via Qiskit Runtime Service
+    # 3. Real IBM Quantum Cloud QPU or Cloud Simulator
     if not HAS_IBM_RUNTIME:
         result_dict["error_message"] = "qiskit-ibm-runtime package not installed."
         return result_dict
@@ -511,63 +477,82 @@ def run_hardware_teleportation_experiment(
     tok = token or get_ibm_token()
     inst = instance or get_ibm_instance()
     if not tok:
-        result_dict["error_message"] = "IBM Quantum API token not configured. Simulation mode active."
+        result_dict["error_message"] = "IBM Quantum API token not configured."
         return result_dict
 
     try:
         service = _get_runtime_service(token=tok, channel=channel, instance=inst)
 
         if not backend_name or backend_name in ("ibm_cloud", "ibm_quantum", "unconfigured", "aer_simulator"):
-            # Select least busy operational backend
             target_backend = service.least_busy(simulator=False, operational=True)
         else:
             target_backend = service.backend(backend_name)
 
         result_dict["hardware_backend"] = target_backend.name
-        is_cloud_sim = getattr(target_backend, "simulator", False) or getattr(target_backend.configuration(), "simulator", False)
+
+        # V2 backends expose .simulator directly; avoid calling .configuration()
+        is_cloud_sim = bool(getattr(target_backend, "simulator", False))
         result_dict["backend_type"] = "IBM Cloud Simulator" if is_cloud_sim else "Physical IBM Quantum QPU"
 
-        # Transpile circuit for hardware backend using Qiskit 2.x pass manager
+        # Transpile for the real hardware target
         try:
             pm = generate_preset_pass_manager(backend=target_backend, optimization_level=1)
         except TypeError:
             pm = generate_preset_pass_manager(target_backend=target_backend, optimization_level=1)
         isa_circuit = pm.run(qc_ideal)
 
-        # Run on SamplerV2
+        # Submit job via SamplerV2
         try:
             sampler = SamplerV2(mode=target_backend)
         except TypeError:
             sampler = SamplerV2(backend=target_backend)
 
         job = sampler.run([isa_circuit], shots=shots)
-        result_dict["job_id"] = job.job_id()
+        job_id = job.job_id()
+        result_dict["job_id"] = job_id  # Surface immediately so user can track
 
-        job_result = job.result()
+        # Wait up to 120 seconds for result; if queue is longer, surface job_id
+        try:
+            job_result = job.result(timeout=120)
+        except Exception as timeout_exc:
+            err_lower = str(timeout_exc).lower()
+            if any(kw in err_lower for kw in ("timeout", "timed out", "time out")):
+                result_dict["error_message"] = (
+                    f"Job submitted to IBM (Job ID: {job_id}). "
+                    f"The QPU queue is taking longer than 2 minutes. "
+                    f"Track at: https://quantum.ibm.com/jobs/{job_id}"
+                )
+            else:
+                result_dict["error_message"] = f"Job result retrieval failed: {timeout_exc}"
+            return result_dict
+
         pub_result = job_result[0]
 
-        # Extract counts from pub result (c2 classical register readout)
+        # Extract counts — try c2 register first, then any register with get_counts
         hw_counts: Dict[str, int] = {}
         data = pub_result.data
         if hasattr(data, "c2"):
-            raw_counts = data.c2.get_counts()
-            hw_counts = {str(k): int(v) for k, v in raw_counts.items()}
+            raw = data.c2.get_counts()
+            hw_counts = {str(k): int(v) for k, v in raw.items()}
         else:
             for reg_name in dir(data):
                 if not reg_name.startswith("_"):
                     val = getattr(data, reg_name)
                     if hasattr(val, "get_counts"):
-                        raw_counts = val.get_counts()
-                        hw_counts = {str(k): int(v) for k, v in raw_counts.items()}
+                        raw = val.get_counts()
+                        hw_counts = {str(k): int(v) for k, v in raw.items()}
                         break
 
         if not hw_counts:
-            hw_counts = {"0": int(shots * 0.95), "1": int(shots * 0.05)}
+            result_dict["error_message"] = (
+                f"Job {job_id} on {target_backend.name} returned empty counts. "
+                f"Inspect at: https://quantum.ibm.com/jobs/{job_id}"
+            )
+            return result_dict
 
         tot_hw = sum(hw_counts.values()) or shots
         hw_probs = {k: v / tot_hw for k, v in hw_counts.items()}
 
-        # Compute classical fidelity / Bhattacharyya coefficient squared
         all_keys = set(ideal_probs.keys()).union(hw_probs.keys())
         bhatt = sum(np.sqrt(ideal_probs.get(k, 0.0) * hw_probs.get(k, 0.0)) for k in all_keys)
         fidelity = float(bhatt ** 2)
@@ -576,10 +561,10 @@ def run_hardware_teleportation_experiment(
         result_dict["hardware_counts"] = hw_counts
         result_dict["hardware_probs"] = hw_probs
         result_dict["fidelity"] = fidelity
-        result_dict["transpiled_depth"] = isa_circuit.depth() if 'isa_circuit' in locals() else qc_ideal.depth()
-        result_dict["transpiled_ops"] = dict(isa_circuit.count_ops()) if 'isa_circuit' in locals() else dict(qc_ideal.count_ops())
+        result_dict["transpiled_depth"] = isa_circuit.depth()
+        result_dict["transpiled_ops"] = dict(isa_circuit.count_ops())
         return result_dict
 
     except Exception as exc:
-        result_dict["error_message"] = f"Hardware execution error: {str(exc)}"
+        result_dict["error_message"] = f"Hardware execution error: {exc}"
         return result_dict
