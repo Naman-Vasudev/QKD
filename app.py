@@ -44,6 +44,7 @@ from core.hardware import (
     get_available_hardware_backends,
     get_available_simulator_backends,
     run_hardware_teleportation_experiment,
+    fetch_ibm_job_result,
     BUILTIN_IBM_NOISE_MODELS,
 )
 from attacks.replay import compute_digest_hamming_distance
@@ -1469,12 +1470,55 @@ elif nav_section == "Hardware Validation":
         m4.metric("Job ID / Execution Type", res["job_id"] if res["job_id"] != "N/A" else res.get("backend_type", "Simulation"))
 
         if not res["success"] and res.get("error_message"):
-            st.error(
-                f"**Hardware Execution Failed** — The job did NOT run on the physical QPU.\n\n"
-                f"**Reason:** {res['error_message']}\n\n"
-                f"Results shown below are the **ideal local simulation only** (not hardware)."
+            job_id_val = res.get("job_id", "N/A")
+            has_valid_job = (
+                job_id_val != "N/A"
+                and len(job_id_val) > 4
+                and not job_id_val.startswith("LOCAL")
             )
-            st.stop()
+
+            st.error(
+                f"**Hardware Execution / Network Notice**\n\n"
+                f"**Reason:** {res['error_message']}\n\n"
+                f"Showing ideal simulation baseline analytics below."
+            )
+
+            col_action1, col_action2 = st.columns([1, 1])
+            if has_valid_job:
+                with col_action1:
+                    job_url = f"https://quantum.ibm.com/jobs/{job_id_val}"
+                    st.markdown(
+                        f'👉 <a href="{job_url}" target="_blank" style="color: #60A5FA; font-weight: bold;">Track Job {job_id_val} on IBM Quantum Cloud Dashboard</a>',
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("🔄 Re-query IBM Cloud for Job Result", key="recheck_hw_job_btn"):
+                        with st.spinner(f"Re-querying IBM Cloud for Job ID {job_id_val}..."):
+                            refetched_res = fetch_ibm_job_result(
+                                job_id=job_id_val,
+                                token=active_token,
+                                channel=selected_channel,
+                                instance=active_instance,
+                                state_label=hw_state,
+                                basis=hw_basis,
+                                shots=hw_shots,
+                            )
+                            st.session_state.hw_res = refetched_res
+                            st.rerun()
+
+            with col_action2:
+                if st.button("⚡ Run Instant Offline Noise Sim (fake_fez)", key="fallback_fake_fez_btn"):
+                    with st.spinner("Executing 156-qubit Heron r2 realistic noise model locally..."):
+                        noise_res = run_hardware_teleportation_experiment(
+                            state_label=hw_state,
+                            basis=hw_basis,
+                            backend_name="fake_fez",
+                            shots=hw_shots,
+                            execution_mode="ibm_fake_noise_sim",
+                        )
+                        st.session_state.hw_res = noise_res
+                        st.rerun()
+
+            st.markdown("---")
 
 
         st.subheader("Outcome Distribution: Ideal Aer Simulation vs Target Quantum Backend")
