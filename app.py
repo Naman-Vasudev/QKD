@@ -261,9 +261,26 @@ css_style_content = """
         box-shadow: 0 0 30px rgba(236, 72, 153, 0.65) !important;
     }
 
-    [data-testid="stDataFrame"] {
-        border: 1px solid rgba(236, 72, 153, 0.25) !important;
-        border-radius: 10px !important;
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label {
+        background: rgba(26, 12, 46, 0.4) !important;
+        border: 1px solid rgba(236, 72, 153, 0.15) !important;
+        border-radius: 8px !important;
+        padding: 8px 14px !important;
+        margin-bottom: 6px !important;
+        transition: all 0.2s ease-in-out !important;
+        font-family: 'Outfit', sans-serif !important;
+        font-weight: 500 !important;
+        letter-spacing: 0.02em !important;
+    }
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+        background: rgba(236, 72, 153, 0.15) !important;
+        border-color: rgba(236, 72, 153, 0.4) !important;
+        box-shadow: 0 0 12px rgba(236, 72, 153, 0.2) !important;
+    }
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {
+        background: linear-gradient(90deg, rgba(236, 72, 153, 0.25), rgba(168, 85, 247, 0.2)) !important;
+        border-color: #EC4899 !important;
+        box-shadow: 0 0 15px rgba(236, 72, 153, 0.3) !important;
     }
     </style>
 """
@@ -277,13 +294,13 @@ st.sidebar.markdown("---")
 nav_section = st.sidebar.radio(
     "NAVIGATE",
     options=[
-        "[ OVERVIEW ]",
-        "[ PROTOCOL ]",
-        "[ QUANTUM LAB ]",
-        "[ HARDWARE VALIDATION ]",
-        "[ SECURITY LAB ]",
-        "[ ANALYSIS ]",
-        "[ REPRODUCIBILITY ]",
+        "Overview",
+        "Protocol",
+        "Quantum Lab",
+        "Hardware Validation",
+        "Security Lab",
+        "Analysis",
+        "Reproducibility",
     ],
     label_visibility="collapsed",
 )
@@ -572,7 +589,7 @@ def _render_position_trace_table_and_map(detailed_results: List[Dict[str, Any]],
 # =============================================================================
 #  SECTION 1: OVERVIEW
 # =============================================================================
-if nav_section == "[ OVERVIEW ]":
+if nav_section == "Overview":
     st.title("QUANTUM DIGITAL SIGNATURE SECURITY LABORATORY")
     st.markdown(
         "Experimental quantum-state transmission, physical attack simulation, "
@@ -676,7 +693,7 @@ if nav_section == "[ OVERVIEW ]":
 # =============================================================================
 #  SECTION 2: PROTOCOL
 # =============================================================================
-elif nav_section == "[ PROTOCOL ]":
+elif nav_section == "Protocol":
     st.title("PROTOCOL ARCHITECTURE & ENCODING INSPECTOR")
 
     protocol_sub = st.radio(
@@ -868,7 +885,7 @@ elif nav_section == "[ PROTOCOL ]":
 # =============================================================================
 #  SECTION 3: QUANTUM LAB
 # =============================================================================
-elif nav_section == "[ QUANTUM LAB ]":
+elif nav_section == "Quantum Lab":
     st.title("QUANTUM LABORATORY")
 
     lab_sub = st.radio(
@@ -1064,7 +1081,7 @@ elif nav_section == "[ QUANTUM LAB ]":
 # =============================================================================
 #  SECTION 4: HARDWARE VALIDATION (OPTIONAL IBM QUANTUM QPU)
 # =============================================================================
-elif nav_section == "[ HARDWARE VALIDATION ]":
+elif nav_section == "Hardware Validation":
     st.title("REAL IBM QUANTUM HARDWARE VALIDATION")
     st.markdown(
         "Execute representative 3-qubit QDS teleportation primitives on physical IBM Quantum QPUs. "
@@ -1183,7 +1200,7 @@ elif nav_section == "[ HARDWARE VALIDATION ]":
 # =============================================================================
 #  SECTION 5: SECURITY LAB
 # =============================================================================
-elif nav_section == "[ SECURITY LAB ]":
+elif nav_section == "Security Lab":
     st.title("SECURITY LABORATORY — ATTACK SIMULATIONS")
 
     attack_choice = st.selectbox(
@@ -1629,7 +1646,7 @@ elif nav_section == "[ SECURITY LAB ]":
 # =============================================================================
 #  SECTION 6: ANALYSIS
 # =============================================================================
-elif nav_section == "[ ANALYSIS ]":
+elif nav_section == "Analysis":
     st.title("STATISTICAL ANALYSIS LABORATORY")
 
     analysis_sub = st.radio(
@@ -1809,7 +1826,7 @@ elif nav_section == "[ ANALYSIS ]":
 # =============================================================================
 #  SECTION 7: REPRODUCIBILITY
 # =============================================================================
-elif nav_section == "[ REPRODUCIBILITY ]":
+elif nav_section == "Reproducibility":
     st.title("SCIENTIFIC DISCLOSURES & REPRODUCIBILITY")
 
     st.header("Execution Environment")
