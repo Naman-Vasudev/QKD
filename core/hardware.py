@@ -91,7 +91,7 @@ def _get_runtime_service(
     for ch in channels_to_try:
         try:
             if tok:
-                return QiskitRuntimeService(channel=ch, token=tok, instance="auto")
+                return QiskitRuntimeService(channel=ch, token=tok)
             else:
                 return QiskitRuntimeService(channel=ch)
         except Exception as exc:
@@ -214,12 +214,19 @@ def run_hardware_teleportation_experiment(
 
         result_dict["hardware_backend"] = target_backend.name
 
-        # Transpile circuit for hardware backend
-        pm = generate_preset_pass_manager(target_backend=target_backend, optimization_level=1)
+        # Transpile circuit for hardware backend using Qiskit 2.x pass manager
+        try:
+            pm = generate_preset_pass_manager(backend=target_backend, optimization_level=1)
+        except TypeError:
+            pm = generate_preset_pass_manager(target_backend=target_backend, optimization_level=1)
         isa_circuit = pm.run(qc_ideal)
 
         # Run on SamplerV2
-        sampler = SamplerV2(mode=target_backend)
+        try:
+            sampler = SamplerV2(mode=target_backend)
+        except TypeError:
+            sampler = SamplerV2(backend=target_backend)
+
         job = sampler.run([isa_circuit], shots=shots)
         result_dict["job_id"] = job.job_id()
 
