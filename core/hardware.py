@@ -1,4 +1,4 @@
-﻿"""
+"""
 IBM Quantum Hardware & Simulator Integration Module.
 
 SCIENTIFIC INTEGRITY & DISCLOSURES:
@@ -522,8 +522,17 @@ def run_hardware_teleportation_experiment(
                     f"The QPU queue is taking longer than 2 minutes. "
                     f"Track at: https://quantum.ibm.com/jobs/{job_id}"
                 )
+            elif any(kw in err_lower for kw in ("nameresolutionerror", "getaddrinfo failed", "max retries exceeded", "connectionerror")):
+                result_dict["error_message"] = (
+                    f"Network connection error while retrieving Job ID `{job_id}`: "
+                    f"Unable to resolve or reach `quantum.cloud.ibm.com`. Please verify internet connectivity or track at: "
+                    f"https://quantum.ibm.com/jobs/{job_id}"
+                )
             else:
-                result_dict["error_message"] = f"Job result retrieval failed: {timeout_exc}"
+                result_dict["error_message"] = (
+                    f"Job result retrieval failed (Job ID: {job_id}): {timeout_exc}. "
+                    f"Track at: https://quantum.ibm.com/jobs/{job_id}"
+                )
             return result_dict
 
         pub_result = job_result[0]
@@ -568,3 +577,115 @@ def run_hardware_teleportation_experiment(
     except Exception as exc:
         result_dict["error_message"] = f"Hardware execution error: {exc}"
         return result_dict
+
+
+def fetch_ibm_job_result(
+    job_id: str,
+    token: Optional[str] = None,
+    channel: str = "ibm_cloud",
+    instance: Optional[str] = None,
+    state_label: str = "|+>",
+    basis: str = "X",
+    shots: int = 512,
+) -> Dict[str, Any]:
+    """
+    Re-check or retrieve the status/results of a previously submitted IBM Quantum job by job_id.
+    """
+    qc_ideal = build_demonstration_teleportation_circuit(state_label, basis, attack_type="none")
+    sim_backend = QuantumBackendAdapter("aer_simulator")
+    sim_res = sim_backend.run_circuit(qc_ideal, shots=shots, seed_simulator=42)
+    ideal_counts = _extract_bob_counts(sim_res["counts"])
+    tot_sim = sum(ideal_counts.values()) or shots
+    ideal_probs = {k: v / tot_sim for k, v in ideal_counts.items()}
+
+    result_dict: Dict[str, Any] = {
+        "success": False,
+        "state_label": state_label,
+        "basis": basis,
+        "shots": shots,
+        "ideal_counts": ideal_counts,
+        "ideal_probs": ideal_probs,
+        "circuit_depth": qc_ideal.depth(),
+        "num_qubits": qc_ideal.num_qubits,
+        "num_clbits": qc_ideal.num_clbits,
+        "gate_counts": dict(qc_ideal.count_ops()),
+        "error_message": "",
+        "hardware_backend": "ibm_cloud",
+        "backend_type": "Physical IBM Quantum QPU",
+        "job_id": job_id,
+        "hardware_counts": {},
+        "hardware_probs": {},
+        "transpiled_depth": qc_ideal.depth(),
+        "transpiled_ops": dict(qc_ideal.count_ops()),
+        "fidelity": 1.0,
+    }
+
+    if not HAS_IBM_RUNTIME:
+        result_dict["error_message"] = "qiskit-ibm-runtime package not installed."
+        return result_dict
+
+    tok = token or get_ibm_token()
+    inst = instance or get_ibm_instance()
+    if not tok:
+        result_dict["error_message"] = "IBM Quantum API token not configured."
+        return result_dict
+
+    try:
+        service = _get_runtime_service(token=tok, channel=channel, instance=inst)
+        job = service.job(job_id)
+        status = job.status()
+        status_str = str(status).upper()
+        backend_obj = getattr(job, "backend", None)
+        if backend_obj:
+            result_dict["hardware_backend"] = getattr(backend_obj, "name", "ibm_cloud")
+
+        if status_str not in ("DONE", "COMPLETED"):
+            result_dict["error_message"] = (
+                f"Job `{job_id}` status is currently: **{status_str}**. "
+                f"It is still in the QPU queue or executing. Track at: https://quantum.ibm.com/jobs/{job_id}"
+            )
+            return result_dict
+
+        job_result = job.result()
+        pub_result = job_result[0]
+
+        hw_counts: Dict[str, int] = {}
+        data = pub_result.data
+        if hasattr(data, "c2"):
+            raw = data.c2.get_counts()
+            hw_counts = {str(k): int(v) for k, v in raw.items()}
+        else:
+            for reg_name in dir(data):
+                if not reg_name.startswith("_"):
+                    val = getattr(data, reg_name)
+                    if hasattr(val, "get_counts"):
+                        raw = val.get_counts()
+                        hw_counts = {str(k): int(v) for k, v in raw.items()}
+                        break
+
+        if not hw_counts:
+            result_dict["error_message"] = f"Job `{job_id}` completed but returned empty counts."
+            return result_dict
+
+        tot_hw = sum(hw_counts.values()) or shots
+        hw_probs = {k: v / tot_hw for k, v in hw_counts.items()}
+        all_keys = set(ideal_probs.keys()).union(hw_probs.keys())
+        bhatt = sum(np.sqrt(ideal_probs.get(k, 0.0) * hw_probs.get(k, 0.0)) for k in all_keys)
+        fidelity = float(bhatt ** 2)
+
+        result_dict["success"] = True
+        result_dict["hardware_counts"] = hw_counts
+        result_dict["hardware_probs"] = hw_probs
+        result_dict["fidelity"] = fidelity
+        return result_dict
+    except Exception as exc:
+        err_str = str(exc)
+        if any(kw in err_str.lower() for kw in ("nameresolutionerror", "getaddrinfo failed", "max retries exceeded")):
+            result_dict["error_message"] = (
+                f"Network connection failed while fetching Job `{job_id}`: "
+                f"Unable to resolve `quantum.cloud.ibm.com`. Please verify internet connection or check at https://quantum.ibm.com/jobs/{job_id}"
+            )
+        else:
+            result_dict["error_message"] = f"Error retrieving Job `{job_id}`: {err_str}"
+        return result_dict
+
