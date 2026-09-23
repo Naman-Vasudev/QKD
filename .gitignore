@@ -17,6 +17,9 @@ scratch/
 .system_generated/
 *.json.tmp
 
+# Security event audit log (runtime artifact; may contain message digests)
+.qds_audit/
+
 # Virtual environments
 .venv/
 venv/

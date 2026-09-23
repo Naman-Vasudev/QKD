@@ -110,7 +110,7 @@ class TestEvaluationEngine(unittest.TestCase):
             shared_key=self.key_balanced,
             seed=800,
         )
-        self.assertEqual(len(results), 6)
+        self.assertEqual(len(results), 8)
         attack_names = [r.attack_name for r in results]
         self.assertIn("No Attack / Baseline", attack_names)
         self.assertIn("Channel Tampering", attack_names)
@@ -118,6 +118,60 @@ class TestEvaluationEngine(unittest.TestCase):
         self.assertIn("Impersonation", attack_names)
         self.assertIn("Quantum Interception", attack_names)
         self.assertIn("Replay Attack", attack_names)
+        # Threat classes added to close the framework's scope gaps.
+        self.assertIn("Replay Attack (Same Message, Nonce Reuse)", attack_names)
+        self.assertIn("Unauthorized Verification", attack_names)
+
+    def test_7b_same_message_replay_is_detected_in_comparison(self) -> None:
+        # The same-message replay scenario must be caught by the nonce registry, which is
+        # the gap the freshness binding was added to close.
+        results = run_security_comparison(
+            message=self.message,
+            shared_key=self.key_balanced,
+            seed=801,
+        )
+        replay = next(
+            r for r in results
+            if r.attack_name == "Replay Attack (Same Message, Nonce Reuse)"
+        )
+        self.assertTrue(replay.relevant_params["freshness_enabled"])
+        self.assertTrue(replay.relevant_params["replay_detected_classically"])
+
+    def test_7c_comparison_attaches_classification_and_decision(self) -> None:
+        results = run_security_comparison(
+            message=self.message,
+            shared_key=self.key_balanced,
+            seed=802,
+        )
+        forgery = next(r for r in results if r.attack_name == "Signature Forgery")
+        self.assertIsNotNone(forgery.decision)
+        self.assertIn(forgery.decision.verdict, ("ACCEPT", "ABORT", "REJECT"))
+        self.assertIsNotNone(forgery.classification)
+        self.assertEqual(forgery.classification.top_label, "FORGERY")
+
+    def test_7d_theoretical_expectation_is_numeric(self) -> None:
+        # Regression: interception and impersonation previously read a dict key that does
+        # not exist, silently falling back to a string / hardcoded default.
+        for name, params in (
+            ("Quantum Interception", {"strategy": "uniform_random"}),
+            ("Impersonation", {}),
+        ):
+            res = run_experiment(
+                attack_name=name,
+                message=self.message,
+                shared_key=self.key_balanced,
+                seed=803,
+                attack_params=params,
+            )
+            self.assertIsInstance(res.theoretical_expectation, float)
+        inter = run_experiment(
+            attack_name="Quantum Interception",
+            message=self.message,
+            shared_key=self.key_balanced,
+            seed=804,
+            attack_params={"strategy": "uniform_random"},
+        )
+        self.assertAlmostEqual(inter.theoretical_expectation, 1.0 / 3.0, places=6)
 
     def test_8_channel_tampering_sweep(self) -> None:
         sweep = run_channel_tampering_sweep(

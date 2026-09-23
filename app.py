@@ -4,13 +4,25 @@ Quantum Digital Signature Security Laboratory — Interactive Research UI.
 SCIENTIFIC INTEGRITY & DISCLOSURES:
 - All displayed numerical results are traceable to actual Qiskit Aer simulations.
 - IBM Quantum hardware validation is an OPTIONAL representative 3-qubit transmission layer.
-- Full 256-qubit security evaluation remains on AerSimulator for reproducibility and efficiency.
+- Full 256-position security evaluation remains on AerSimulator for reproducibility and
+  efficiency. "256 qubits" means 256 sequential 3-qubit teleportation circuits, not one
+  256-qubit circuit.
 - Baseline noise probability p0 is a calibrated experimental parameter, NOT a universal constant.
 - Threat detection uses exact Binomial upper-tail testing; it indicates statistical inconsistency
   with baseline noise, not proof of attacker identity.
-- Artificial intelligence (AI) and machine learning (ML) are explicitly NOT used.
+- Threat CLASSIFICATION uses deterministic distance scoring against analytically derived
+  per-basis error signatures. Artificial intelligence (AI) and machine learning (ML) are
+  explicitly NOT used anywhere in this system.
 - No emojis are used anywhere in this scientific interface.
 - This is a Qiskit Aer simulation laboratory, with optional IBM QPU validation.
+
+SECTIONS:
+  1. Overview               7. Threat Classification
+  2. Protocol (+ math)      8. Analysis
+  3. Key Distribution       9. Security Bounds
+  4. Quantum Lab           10. Performance
+  5. Hardware Validation   11. Audit Log
+  6. Security Lab          12. Reproducibility
 """
 
 import base64
@@ -18,6 +30,7 @@ import json
 import math
 import os
 import platform
+import secrets
 import sys
 from typing import List, Dict, Any, Optional
 
@@ -29,14 +42,28 @@ import matplotlib.patches as mpatches
 import numpy as np
 from scipy.stats import binom
 
-from qds.encoding import sha256_bits, encode_message
+from qds.encoding import sha256_bits, sha256_hex, encode_message, session_digest_bits
 from qds.circuit_visualization import (
     get_state_math_info,
     build_demonstration_teleportation_circuit,
     draw_circuit_mpl,
     draw_circuit_ascii,
 )
+from qds.session import (
+    NonceRegistry,
+    authorize_verifier,
+    create_session,
+    generate_master_secret,
+    issue_verifier_token,
+)
+from qds.keydist import (
+    ALL_QKD_BASES,
+    DEFAULT_QKD_BASES,
+    establish_signing_key,
+    run_key_distribution,
+)
 from core.backend import QuantumBackendAdapter
+from core.audit import AuditLogger
 from core.hardware import (
     get_ibm_token,
     get_ibm_instance,
@@ -47,14 +74,42 @@ from core.hardware import (
     fetch_ibm_job_result,
     BUILTIN_IBM_NOISE_MODELS,
 )
-from attacks.replay import compute_digest_hamming_distance
-from statistics.detector import detect_threat
+from attacks.replay import compute_digest_hamming_distance, run_replay_attack
+from attacks.unauthorized import (
+    ATTACKER_PROFILES,
+    run_authorization_profile_sweep,
+    run_unauthorized_verification_attack,
+)
+from qds_statistics.detector import (
+    detect_threat,
+    compute_decision_thresholds,
+    decide_signature,
+)
+from qds_statistics.classifier import (
+    THREAT_DISPLAY_NAMES,
+    classify_threat,
+    minimum_trials_for_resolution,
+)
+from qds_statistics.bounds import (
+    ATTACK_ERROR_RATES,
+    attack_detection_summary,
+    detection_power,
+    detection_power_curve,
+    forgery_bound_curve,
+    forgery_success_probability,
+)
 from evaluation.runner import (
     ExperimentResult,
     run_experiment,
     run_security_comparison,
     run_channel_tampering_sweep,
     run_basis_wise_channel_sweep,
+)
+from evaluation.performance import (
+    analyze_verification_complexity,
+    build_complexity_table,
+    measure_encoding_performance,
+    measure_verification_performance,
 )
 
 # ─── Page configuration ───────────────────────────────────────────────────────
@@ -314,10 +369,15 @@ nav_section = st.sidebar.radio(
     options=[
         "Overview",
         "Protocol",
+        "Key Distribution",
         "Quantum Lab",
         "Hardware Validation",
         "Security Lab",
+        "Threat Classification",
         "Analysis",
+        "Security Bounds",
+        "Performance",
+        "Audit Log",
         "Reproducibility",
     ],
     label_visibility="collapsed",
@@ -386,19 +446,55 @@ message = st.sidebar.text_input("Message Payload (M)", value="ABC")
 
 key_mode = st.sidebar.selectbox(
     "Secret Key K",
-    options=["Deterministic Balanced (0,1,0,1...)", "Random 256-bit Key"],
+    options=[
+        "Cryptographic Random (CSPRNG)",
+        "Quantum Key Distribution (BBM92)",
+        "Deterministic Balanced (0,1,0,1...)",
+    ],
+    help=(
+        "CSPRNG uses secrets.randbits, suitable for real use. BBM92 establishes K from "
+        "measured Bell pairs. The deterministic pattern is for teaching only: it is "
+        "publicly guessable and voids the information-theoretic forgery bound."
+    ),
 )
 
-if key_mode == "Deterministic Balanced (0,1,0,1...)":
-    st.session_state.shared_key = [i % 2 for i in range(256)]
-elif key_mode == "Random 256-bit Key":
-    if st.sidebar.button("Generate New Random Key"):
-        st.session_state.shared_key = list(np.random.randint(0, 2, size=256))
-
+# A cryptographically secure key is the safe default. The alternating 0,1,0,1 pattern is
+# retained only for reproducible demonstrations; it is publicly guessable, so an attacker
+# who assumes it needs no forgery at all.
 if "shared_key" not in st.session_state:
-    st.session_state.shared_key = [i % 2 for i in range(256)]
+    st.session_state.shared_key = [secrets.randbits(1) for _ in range(256)]
+    st.session_state.key_provenance = "Cryptographic Random (CSPRNG)"
+
+if key_mode == "Deterministic Balanced (0,1,0,1...)":
+    st.sidebar.warning(
+        "INSECURE KEY: this pattern is public knowledge. Forgery bounds reported "
+        "elsewhere in this app assume a uniformly random key and do not hold here."
+    )
+    if st.session_state.get("key_provenance") != "Deterministic Balanced (0,1,0,1...)":
+        st.session_state.shared_key = [i % 2 for i in range(256)]
+        st.session_state.key_provenance = "Deterministic Balanced (0,1,0,1...)"
+
+elif key_mode == "Cryptographic Random (CSPRNG)":
+    if st.sidebar.button("Generate New CSPRNG Key") or \
+            st.session_state.get("key_provenance") == "Deterministic Balanced (0,1,0,1...)":
+        st.session_state.shared_key = [secrets.randbits(1) for _ in range(256)]
+        st.session_state.key_provenance = "Cryptographic Random (CSPRNG)"
+
+elif key_mode == "Quantum Key Distribution (BBM92)":
+    if st.sidebar.button("Establish Key via BBM92"):
+        with st.spinner("Distributing Bell pairs and sifting..."):
+            qkd_key, qkd_result = establish_signing_key(key_length=256)
+        st.session_state.shared_key = qkd_key
+        st.session_state.key_provenance = "Quantum Key Distribution (BBM92)"
+        st.session_state.qkd_result = qkd_result
+    if st.session_state.get("key_provenance") != "Quantum Key Distribution (BBM92)":
+        st.sidebar.info("Press the button to establish K from measured Bell pairs.")
 
 shared_key: List[int] = st.session_state.shared_key
+key_provenance: str = st.session_state.get("key_provenance", key_mode)
+st.sidebar.caption(
+    f"Active key: {key_provenance} | 1-bit density {sum(shared_key) / len(shared_key):.3f}"
+)
 
 baseline_noise = st.sidebar.slider(
     "Baseline Error Rate (p0)",
@@ -426,6 +522,43 @@ shots_per_qubit = st.sidebar.selectbox(
 seed_input = st.sidebar.number_input("Random Seed", value=42, step=1)
 seed = int(seed_input)
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("### PROTOCOL HARDENING")
+
+freshness_enabled = st.sidebar.checkbox(
+    "Session Nonce Binding (replay resistance)",
+    value=True,
+    help=(
+        "Binds a random nonce, counter, signer identity, and timestamp into the hashed "
+        "payload. Without this, a same-message replay is indistinguishable from a fresh "
+        "signature by any measurement."
+    ),
+)
+
+audit_enabled = st.sidebar.checkbox(
+    "Security Event Logging",
+    value=True,
+    help="Append verification and threat events to an exportable JSON Lines audit log.",
+)
+
+# Process-wide singletons held in session state so they survive Streamlit reruns.
+if "audit_logger" not in st.session_state:
+    st.session_state.audit_logger = AuditLogger()
+if "nonce_registry" not in st.session_state:
+    st.session_state.nonce_registry = NonceRegistry()
+if "master_secret" not in st.session_state:
+    st.session_state.master_secret = generate_master_secret()
+
+st.session_state.audit_logger.enabled = audit_enabled
+audit_logger: AuditLogger = st.session_state.audit_logger
+nonce_registry: NonceRegistry = st.session_state.nonce_registry
+master_secret: bytes = st.session_state.master_secret
+
+active_session = create_session(signer_id="alice", counter=1) if freshness_enabled else None
+decision_thresholds = compute_decision_thresholds(
+    total_trials=256, baseline_error_rate=baseline_noise
+)
+
 # ─── Helper: run single experiment and cache ──────────────────────────────────
 
 def _run_and_cache(attack_name: str, attack_params: Dict[str, Any]) -> ExperimentResult:
@@ -439,8 +572,81 @@ def _run_and_cache(attack_name: str, attack_params: Dict[str, Any]) -> Experimen
         seed=seed,
         backend=active_backend_adapter,
         attack_params=attack_params,
+        audit_logger=audit_logger,
     )
     return res
+
+
+def _render_decision_banner(decision) -> None:
+    """Render the three-way ACCEPT / ABORT / REJECT verdict with its justification."""
+    if decision is None:
+        return
+    if decision.verdict == "ACCEPT":
+        st.success(f"VERDICT: ACCEPT — {decision.justification}")
+    elif decision.verdict == "ABORT":
+        st.warning(f"VERDICT: ABORT — {decision.justification}")
+    else:
+        st.error(f"VERDICT: REJECT — {decision.justification}")
+
+
+def _render_classification_block(classification, key_prefix: str = "") -> None:
+    """Render a threat classification: verdict, basis fingerprint, ranked hypotheses."""
+    if classification is None:
+        st.info(
+            "No per-position measurement records were produced for this run, so the "
+            "basis-resolved classifier has nothing to profile."
+        )
+        return
+
+    profile = classification.profile
+
+    st.markdown(f"#### Classified Threat: {classification.top_display_name}")
+    st.progress(
+        min(1.0, max(0.0, classification.confidence)),
+        text=f"Discriminability confidence: {classification.confidence:.2f}",
+    )
+    st.caption(classification.interpretation)
+
+    col_a, col_b, col_c, col_d = st.columns(4)
+    col_a.metric("e_Z (Z basis)", f"{profile.rates['Z']:.4f}")
+    col_b.metric("e_X (X basis)", f"{profile.rates['X']:.4f}")
+    col_c.metric("e_Y (Y basis)", f"{profile.rates['Y']:.4f}")
+    col_d.metric("Pooled error", f"{profile.overall_rate:.4f}")
+
+    if profile.key_error_correlation is not None:
+        st.metric(
+            "Error-to-key correlation (MCC)",
+            f"{profile.key_error_correlation:+.4f}",
+            help=(
+                "Matthews correlation between the per-position error indicator and the "
+                "secret key bit K_i. Approaches +1 for a digest-only forgery, where "
+                "errors land exactly where K_i = 1, and 0 for random-guess impersonation."
+            ),
+        )
+
+    st.markdown("**Ranked hypotheses** (lower distance = better fit)")
+    st.dataframe(
+        [
+            {
+                "Threat Class": h.display_name,
+                "Distance": f"{h.distance:.4f}",
+                "Score": f"{h.score:.4f}",
+                "Discriminator Penalty": f"{h.penalty:.2f}",
+                "Expected (Z, X, Y)": (
+                    f"({h.expected_signature['Z']:.3f}, "
+                    f"{h.expected_signature['X']:.3f}, "
+                    f"{h.expected_signature['Y']:.3f})"
+                ),
+            }
+            for h in classification.hypotheses
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    with st.expander("Evidence for the leading hypothesis"):
+        for item in classification.hypotheses[0].evidence:
+            st.markdown(f"- {item}")
 
 
 def _plot_pmf(n: int, p0: float, k_obs: int, alpha_val: float) -> plt.Figure:
@@ -645,7 +851,7 @@ def _render_position_trace_table_and_map(detailed_results: List[Dict[str, Any]],
 
         rows.append(row_dict)
 
-    st.dataframe(rows, use_container_width=True)
+    st.dataframe(rows, width="stretch")
 
     with st.expander("Raw Experimental Trace Data (JSON Inspector)"):
         num_inspect = st.selectbox("Inspect raw records", [20, 50, 100, 256], index=0)
@@ -1426,12 +1632,180 @@ elif nav_section == "Protocol":
 
     protocol_sub = st.radio(
         "Section",
-        ["Architecture Diagram", "Classical Encoding Inspector", "Signature Verification"],
+        [
+            "Mathematical Model",
+            "Architecture Diagram",
+            "Classical Encoding Inspector",
+            "Signature Verification",
+        ],
         horizontal=True,
     )
 
+    # ── 2z: Formal Mathematical Model ─────────────────────────────────────────
+    if protocol_sub == "Mathematical Model":
+        st.header("Formal Mathematical Model")
+        st.caption(
+            "Complete derivation in docs/mathematical_model.md. This page reproduces the "
+            "core results that the implementation depends on."
+        )
+
+        st.subheader("1. Classical Preprocessing and Session Binding")
+        st.latex(r"P = M \,\|\, \mathrm{id} \,\|\, \nu \,\|\, c \,\|\, t")
+        st.latex(r"D = \mathrm{SHA\text{-}256}(P) \in \{0,1\}^{256}")
+        st.latex(r"b_i = d_i \oplus K_i, \qquad i = 0, \dots, 255")
+        st.markdown(
+            "For a uniformly random key K, each encoded bit is uniform and statistically "
+            "independent of the digest:"
+        )
+        st.latex(r"\Pr[b_i = 0] = \Pr[d_i = K_i] = \tfrac{1}{2}")
+        st.info(
+            "This is the source of information-theoretic security. An adversary who "
+            "knows M — and therefore D — obtains ZERO information about b_i. SHA-256 "
+            "alone is not a signature: without K, anyone could compute D and prepare the "
+            "matching states."
+        )
+
+        st.subheader("2. Basis Schedule and Pauli Eigenstate Encoding")
+        st.latex(
+            r"B_i = \begin{cases} Z & i \equiv 0 \pmod 3 \\ "
+            r"X & i \equiv 1 \pmod 3 \\ Y & i \equiv 2 \pmod 3 \end{cases}"
+        )
+        st.latex(r"\sigma_{B_i} |\psi_i\rangle = \lambda_i |\psi_i\rangle, \qquad \lambda_i \in \{+1, -1\}")
+        st.dataframe(
+            [
+                {"Basis": "Z", "b=0": "|0>", "eigenvalue": "+1", "b=1": "|1>", "eigenvalue ": "-1",
+                 "Preparation": "I  /  X"},
+                {"Basis": "X", "b=0": "|+>", "eigenvalue": "+1", "b=1": "|->", "eigenvalue ": "-1",
+                 "Preparation": "H  /  HX"},
+                {"Basis": "Y", "b=0": "|+i>", "eigenvalue": "+1", "b=1": "|-i>", "eigenvalue ": "-1",
+                 "Preparation": "SH  /  SHX"},
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+        st.subheader("3. Bell-State Entanglement")
+        st.latex(r"|\Phi^+\rangle_{12} = \tfrac{1}{\sqrt{2}}\left(|00\rangle + |11\rangle\right)")
+        st.latex(
+            r"\langle \sigma_Z \otimes \sigma_Z \rangle = +1, \quad "
+            r"\langle \sigma_X \otimes \sigma_X \rangle = +1, \quad "
+            r"\langle \sigma_Y \otimes \sigma_Y \rangle = -1"
+        )
+
+        st.subheader("4. Quantum Teleportation")
+        st.markdown("Expanding in the Bell basis of Alice's two qubits:")
+        st.latex(
+            r"|\psi\rangle_0 |\Phi^+\rangle_{12} = \tfrac{1}{2}\Big["
+            r"|\Phi^+\rangle_{01}|\psi\rangle_2"
+            r"+ |\Phi^-\rangle_{01}(\sigma_Z|\psi\rangle_2)"
+            r"+ |\Psi^+\rangle_{01}(\sigma_X|\psi\rangle_2)"
+            r"+ |\Psi^-\rangle_{01}(\sigma_X\sigma_Z|\psi\rangle_2)\Big]"
+        )
+        st.markdown(
+            "Each outcome occurs with probability 1/4, **independent of the signature "
+            "state**. Alice's measurement therefore reveals nothing, and the classical "
+            "bits she sends leak nothing."
+        )
+
+        st.subheader("5. Pauli Correction Operations")
+        st.latex(r"|\psi\rangle_2 = \sigma_Z^{c_0}\, \sigma_X^{c_1}\, |\tilde\psi\rangle_2")
+        st.dataframe(
+            [
+                {"c0": 0, "c1": 0, "Bob's state": "|psi>", "Correction": "I"},
+                {"c0": 0, "c1": 1, "Bob's state": "X|psi>", "Correction": "X"},
+                {"c0": 1, "c1": 0, "Bob's state": "Z|psi>", "Correction": "Z"},
+                {"c0": 1, "c1": 1, "Bob's state": "XZ|psi>", "Correction": "XZ"},
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+        st.warning(
+            "Teleportation transports whatever state it is given, from whoever supplies "
+            "it. It does NOT authenticate. Authentication comes only from K, which "
+            "determines which state a legitimate signer would have supplied."
+        )
+
+        st.subheader("6. Projective Measurement Rules")
+        st.latex(r"\Pi_{\pm}^{(B)} = \tfrac{1}{2}\left(I \pm \sigma_B\right), \qquad "
+                 r"\Pi_+ + \Pi_- = I, \qquad \Pi_{\pm}^2 = \Pi_{\pm}")
+        st.latex(r"\Pr[\lambda = \pm 1] = \langle\psi| \Pi_{\pm}^{(B)} |\psi\rangle")
+        st.markdown(
+            "Rotations into the computational basis: Z requires none, X uses H (since "
+            "H X H† = Z), and Y uses H S† (since H S† Y (H S†)† = Z)."
+        )
+        st.success(
+            "DETERMINISTIC ACCEPTANCE: when the verification basis matches the "
+            "preparation basis, the state is an eigenstate of that observable and the "
+            "expected eigenvalue is obtained with probability exactly 1. A noiseless "
+            "channel therefore yields exactly zero verification errors, not merely few."
+        )
+
+        st.subheader("7. Verification Statistic and Decision Rule")
+        st.latex(r"E_i = \mathbb{1}\left[\lambda_i^{\mathrm{obs}} \neq \lambda_i\right], "
+                 r"\qquad k = \sum_i E_i, \qquad \hat{e} = k/n")
+        st.latex(r"H_0: p = p_0 \qquad \text{vs} \qquad H_1: p > p_0")
+        st.latex(r"\Pr[K \ge k \mid n, p_0] = \sum_{j=k}^{n} \binom{n}{j} p_0^{\,j} (1-p_0)^{\,n-j}")
+        st.markdown("Two-threshold decision rule:")
+        st.latex(
+            r"\sigma = \sqrt{\frac{p_0(1-p_0)}{n}}, \qquad "
+            r"s_a = p_0 + 3\sigma, \qquad s_v = \frac{s_a + q_{\min}}{2}"
+        )
+        st.latex(
+            r"\text{verdict} = \begin{cases} \textbf{ACCEPT} & \hat{e} \le s_a \\ "
+            r"\textbf{ABORT} & s_a < \hat{e} < s_v \\ "
+            r"\textbf{REJECT} & \hat{e} \ge s_v \end{cases}"
+        )
+        st.caption(
+            f"With the current settings (n = 256, p0 = {baseline_noise:.3f}): "
+            f"sigma = {decision_thresholds.sigma:.5f}, "
+            f"s_a = {decision_thresholds.s_accept:.4f}, "
+            f"s_v = {decision_thresholds.s_reject:.4f}."
+        )
+
+        st.subheader("8. Attack Error Rates (Derived)")
+        st.latex(r"\text{Channel tampering: } \quad \hat{e} \to \tfrac{2}{3}p, "
+                 r"\qquad (e_Z, e_X, e_Y) \to (p, 0, p)")
+        st.latex(r"\text{Intercept-resend: } \quad \hat{e} \to "
+                 r"\tfrac{1}{3}\cdot 0 + \tfrac{2}{3}\cdot\tfrac{1}{2} = \tfrac{1}{3}")
+        st.latex(r"\text{Forgery: } \quad \hat{e} \to \rho_K = \tfrac{1}{n}\sum_i K_i")
+        st.latex(r"\text{Impersonation: } \quad \hat{e} \to \tfrac{1}{2}")
+        st.latex(r"\text{Replay: } \quad \hat{e} = d_H(D, D')/n")
+
+        st.subheader("9. Forgery Probability Bound")
+        st.latex(
+            r"P_{\mathrm{forge}}(n, s_a) = "
+            r"\sum_{j=0}^{\lfloor s_a n \rfloor} \binom{n}{j} \left(\tfrac{1}{2}\right)^{n}"
+        )
+        st.caption(
+            "At n = 256 with s_a = 0.046 this is 5.64e-59, or 193.5 bits of security. "
+            "See the Security Bounds section for the full curve."
+        )
+
+        st.subheader("10. Computational Complexity")
+        st.latex(r"T_{\text{total}}(n) = O(n)")
+        st.caption(
+            "Measured empirically at exponent k = 1.01 with R^2 = 0.9997. "
+            "See the Performance section."
+        )
+
+        with st.expander("Security scope: what is NOT provided"):
+            st.markdown(
+                "- **Non-repudiation / transferability.** A full QDS scheme lets a "
+                "recipient forward a signature to a third party who reaches the same "
+                "verdict. This is a two-party authentication scheme: K is shared, so the "
+                "verifier could have produced any signature the signer could. "
+                "Transferability needs per-recipient key halves and a Gottesman-Chuang "
+                "two-threshold construction.\n"
+                "- **Composable key security.** No privacy amplification is implemented.\n"
+                "- **Coherent or collective attacks.** Only individual-qubit adversaries "
+                "are modelled.\n"
+                "- **Authenticated classical channel.** Assumed, not implemented.\n"
+                "- **Side-channel resistance.** Out of scope, except constant-time token "
+                "comparison."
+            )
+
     # ── 2a: Architecture Diagram ──────────────────────────────────────────────
-    if protocol_sub == "Architecture Diagram":
+    elif protocol_sub == "Architecture Diagram":
         st.header("Protocol Architecture Diagram")
         st.markdown(
             "The QDS protocol comprises two fully separated domains: classical pre-processing "
@@ -1608,7 +1982,7 @@ elif nav_section == "Protocol":
                 "State |psi_i>": eq_.state_label,
                 "Eigenvalue": eq_.expected_eigenvalue,
             })
-        st.dataframe(rows, use_container_width=True)
+        st.dataframe(rows, width="stretch")
 
     # ── 2c: Signature Verification ───────────────────────────────────────────
     else:
@@ -1828,7 +2202,7 @@ elif nav_section == "Quantum Lab":
                 "Prepared State": eq.state_label,
                 "Expected Eigenvalue": eq.expected_eigenvalue,
             })
-        st.dataframe(rows, use_container_width=True)
+        st.dataframe(rows, width="stretch")
 
         st.subheader("Encoded Bit Distribution Bitmap")
         st.markdown("The 256 encoded bits b_i visualized as a 16x16 pixel grid. Black = 1, White = 0.")
@@ -1901,7 +2275,7 @@ elif nav_section == "Hardware Validation":
             )
         with ch_col2:
             st.markdown(" ")
-            if st.button("AUTHENTICATE & SAVE CREDENTIALS", type="secondary", use_container_width=True):
+            if st.button("AUTHENTICATE & SAVE CREDENTIALS", type="secondary", width="stretch"):
                 with st.spinner("Verifying credentials with IBM Quantum..."):
                     st.session_state["IBM_QUANTUM_API_TOKEN"] = token_input.strip()
                     st.session_state["IBM_QUANTUM_INSTANCE_CRN"] = instance_input.strip()
@@ -2197,7 +2571,7 @@ elif nav_section == "Hardware Validation":
                 "Target Backend (%)": f"{hw_pct:.2f}%",
                 "Noise Delta (Δ%)": f"{delta_pct:+.2f}%",
             })
-        st.dataframe(tbl_comp, use_container_width=True)
+        st.dataframe(tbl_comp, width="stretch")
 
         # Transpiled Gate Decomposition
         st.subheader("Transpiled Native Gate Breakdown")
@@ -2240,6 +2614,8 @@ elif nav_section == "Security Lab":
             "Impersonation (Random State Guess)",
             "Quantum Interception (Intercept-Resend)",
             "Replay Attack",
+            "Replay Attack (Same Message, Nonce Reuse)",
+            "Unauthorized Verification Attempt",
         ],
     )
 
@@ -2671,6 +3047,218 @@ elif nav_section == "Security Lab":
                 _render_position_trace_table_and_map(res.detailed_results, attack_type="signature_replay")
                 _render_hypothesis_test_block(res)
 
+    # ────────────────────────────────────────────────
+    # ATTACK: Same-Message Replay via Nonce Reuse
+    # ────────────────────────────────────────────────
+    elif attack_choice == "Replay Attack (Same Message, Nonce Reuse)":
+        st.header("Replay Attack: Same Message, Nonce Reuse")
+
+        st.markdown('<div class="sec-header">A. THE PROBLEM THIS SOLVES</div>',
+                    unsafe_allow_html=True)
+        st.markdown(
+            "Without freshness binding the encoding is deterministic: D = SHA-256(M), "
+            "b_i = d_i XOR K_i. A captured signature for M is therefore **bit-identical** "
+            "to a fresh one, and no quantum measurement can distinguish them, because "
+            "there is nothing to distinguish. This was the protocol's one undetectable "
+            "attack."
+        )
+
+        st.markdown('<div class="sec-header">B. THE FIX</div>', unsafe_allow_html=True)
+        st.latex(r"P = M \,\|\, \mathrm{id} \,\|\, \nu \,\|\, c \,\|\, t")
+        st.latex(r"D = \mathrm{SHA\text{-}256}(P), \qquad b_i = d_i \oplus K_i")
+        st.markdown(
+            "Replay is now defeated by **two independent mechanisms**:\n\n"
+            "1. **Classical (O(1)):** the verifier's nonce registry has already consumed "
+            "that nonce, so the replay is rejected before any quantum state is measured.\n"
+            "2. **Quantum (O(n)):** if the attacker invents a fresh nonce to evade the "
+            "registry, the bound digest changes and she must re-derive all 256 states "
+            "for it. Without K that is exactly the forgery problem, detected at ~50% "
+            "error."
+        )
+
+        st.markdown('<div class="sec-header">C. RUN COMPARISON</div>',
+                    unsafe_allow_html=True)
+        st.caption(
+            "Both modes replay the same captured signature for the same message. Only "
+            "the freshness binding differs."
+        )
+
+        if st.button("RUN SAME-MESSAGE REPLAY (BOTH MODES)", type="primary"):
+            with st.spinner("Executing both modes..."):
+                legacy_res = run_replay_attack(
+                    original_message=message,
+                    target_message=message,
+                    shared_key=shared_key,
+                    shots_per_qubit=shots_per_qubit,
+                    baseline_error_rate=baseline_noise,
+                    alpha=alpha,
+                    backend=active_backend_adapter,
+                    seed=seed,
+                )
+                demo_session = create_session(signer_id="alice", counter=1)
+                protected_res = run_replay_attack(
+                    original_message=message,
+                    target_message=message,
+                    shared_key=shared_key,
+                    shots_per_qubit=shots_per_qubit,
+                    baseline_error_rate=baseline_noise,
+                    alpha=alpha,
+                    backend=active_backend_adapter,
+                    seed=seed,
+                    original_session=demo_session,
+                    nonce_registry=NonceRegistry(),
+                )
+
+            col_legacy, col_prot = st.columns(2)
+
+            with col_legacy:
+                st.markdown("#### Legacy: no freshness binding")
+                st.metric("Observed error rate", f"{legacy_res['observed_error_rate']:.4f}")
+                st.metric(
+                    "Detected",
+                    "NO" if not legacy_res["replay_detected_classically"] else "YES",
+                )
+                st.error(
+                    "ATTACK SUCCEEDS: the replayed signature is indistinguishable from "
+                    "a fresh one."
+                )
+                st.caption(legacy_res["protocol_note"])
+
+            with col_prot:
+                st.markdown("#### Protected: session nonce bound")
+                st.metric("Observed error rate", f"{protected_res['observed_error_rate']:.4f}")
+                st.metric(
+                    "Detected",
+                    "YES" if protected_res["replay_detected_classically"] else "NO",
+                )
+                if protected_res["replay_detected_classically"]:
+                    st.success(
+                        "ATTACK BLOCKED: nonce already consumed. Rejected in O(1) "
+                        "before any quantum state was measured."
+                    )
+                st.caption(protected_res["protocol_note"])
+
+            st.info(
+                "Note that the quantum error rate is ~0 in BOTH columns. That is the "
+                "point: the quantum layer genuinely cannot see this attack. Detection "
+                "comes from the classical freshness mechanism, which is why the "
+                "framework needs both."
+            )
+
+            audit_logger.log_event(
+                event_type="REPLAY_BLOCKED",
+                severity="CRITICAL",
+                verdict="REJECT",
+                message_digest_prefix=sha256_hex(message)[:16],
+                detail={
+                    "attack_name": "Replay Attack (Same Message, Nonce Reuse)",
+                    "freshness_enabled": True,
+                    "replay_detected_classically": protected_res["replay_detected_classically"],
+                    "observed_error_rate": protected_res["observed_error_rate"],
+                },
+            )
+
+    # ────────────────────────────────────────────────
+    # ATTACK: Unauthorized Verification Attempt
+    # ────────────────────────────────────────────────
+    elif attack_choice == "Unauthorized Verification Attempt":
+        st.header("Unauthorized Verification Attempt")
+
+        st.markdown('<div class="sec-header">A. THREAT MODEL</div>', unsafe_allow_html=True)
+        st.markdown(
+            "A party attempts to verify a signature without being entitled to. Three "
+            "attacker profiles are modelled:\n\n"
+            "- **NO_TOKEN** — presents no authorization token at all.\n"
+            "- **FORGED_TOKEN** — fabricates a token of the correct shape.\n"
+            "- **WRONG_IDENTITY** — presents a token validly issued to somebody else "
+            "(token substitution / relay)."
+        )
+
+        st.markdown('<div class="sec-header">B. MECHANISM</div>', unsafe_allow_html=True)
+        st.latex(r"\tau = \mathrm{HMAC\text{-}SHA256}_{K_M}(\mathrm{id})")
+        st.markdown(
+            "Tokens are compared in constant time via `hmac.compare_digest`. Detection "
+            "is **deterministic**: a token either validates or it does not. There is no "
+            "statistical uncertainty and therefore no false-positive rate, unlike the "
+            "measurement-based detectors used for the quantum attacks."
+        )
+        st.info(
+            "WHY EARLY REJECTION MATTERS: quantum states cannot be copied and are "
+            "destroyed by measurement. A party allowed to measure a signature consumes "
+            "it, so unrestricted verification is itself a denial-of-service vector "
+            "against legitimate verifiers. Authorization runs before the quantum stage."
+        )
+
+        st.markdown('<div class="sec-header">C. RUN ALL PROFILES</div>',
+                    unsafe_allow_html=True)
+        unauth_subset = st.slider(
+            "Signature positions to verify in the control run", 8, 64, 24, 8
+        )
+
+        if st.button("RUN UNAUTHORIZED VERIFICATION SWEEP", type="primary"):
+            with st.spinner("Attempting verification under each attacker profile..."):
+                sweep = run_authorization_profile_sweep(
+                    message=message,
+                    shared_key=shared_key,
+                    sample_indices=list(range(int(unauth_subset))),
+                    baseline_error_rate=baseline_noise,
+                    backend=active_backend_adapter,
+                    seed=seed,
+                )
+
+            st.dataframe(
+                [
+                    {
+                        "Attacker Profile": r["attacker_profile"],
+                        "Token Presented": "Yes" if r["token_presented"] else "No",
+                        "Denied": "YES" if r["denied"] else "NO",
+                        "Detection": "Deterministic" if r["detection_is_deterministic"] else "Statistical",
+                        "Quantum States Consumed": r["quantum_states_consumed_by_attacker"],
+                        "Legitimate Verifier Still Accepted": (
+                            "Yes" if r["control_verification_accepted"] else "No"
+                        ),
+                    }
+                    for r in sweep
+                ],
+                width="stretch",
+                hide_index=True,
+            )
+
+            if all(r["denied"] for r in sweep):
+                st.success(
+                    "ALL UNAUTHORIZED PROFILES DENIED. Zero signature states were "
+                    "consumed by any attacker, and the legitimate verifier was still "
+                    "accepted in every case — access control does not impair authorized "
+                    "use."
+                )
+            else:
+                st.error("At least one unauthorized profile was NOT denied.")
+
+            for r in sweep:
+                st.caption(r["interpretation"])
+                audit_logger.log_event(
+                    event_type="AUTH_DENIED" if r["denied"] else "AUTH_GRANTED",
+                    severity="CRITICAL" if r["denied"] else "INFO",
+                    message_digest_prefix=sha256_hex(message)[:16],
+                    detail={
+                        "attack_name": "Unauthorized Verification",
+                        "attacker_profile": r["attacker_profile"],
+                        "attacker_id": r["attacker_id"],
+                        "denied": r["denied"],
+                        "quantum_states_consumed": r["quantum_states_consumed_by_attacker"],
+                    },
+                )
+
+        st.markdown('<div class="sec-header">D. SCOPE DISCLOSURE</div>',
+                    unsafe_allow_html=True)
+        st.warning(
+            "This is a CLASSICAL access-control mechanism, not an information-theoretic "
+            "one. Its security rests on the PRF security of HMAC-SHA256 and on the "
+            "master secret remaining secret. It is included because unauthorized "
+            "verification is a named threat in the framework's scope and the quantum "
+            "layer cannot address it: quantum states do not encode who may measure them."
+        )
+
 
 # =============================================================================
 #  SECTION 6: ANALYSIS
@@ -2802,7 +3390,7 @@ elif nav_section == "Analysis":
                     "Binomial p-value": f"{r.threat_result.p_value:.4e}",
                     "Threat Decision": "THREAT DETECTED" if r.threat_result.threat_detected else "NORMAL CHANNEL",
                 })
-            st.dataframe(tbl_data, use_container_width=True)
+            st.dataframe(tbl_data, width="stretch")
 
             st.subheader("Qualitative Security Mechanism Comparison")
             qual_data = [
@@ -2849,11 +3437,651 @@ elif nav_section == "Analysis":
                     "Why Detection Works": "SHA-256 digest Hamming distance causes errors for diff message",
                 },
             ]
-            st.dataframe(qual_data, use_container_width=True)
+            st.dataframe(qual_data, width="stretch")
 
 
 # =============================================================================
-#  SECTION 7: REPRODUCIBILITY
+#  SECTION 7: KEY DISTRIBUTION (BBM92 ENTANGLEMENT-BASED QKD)
+# =============================================================================
+elif nav_section == "Key Distribution":
+    st.title("QUANTUM KEY DISTRIBUTION — BBM92")
+    st.caption(
+        "Establishes the shared secret key K from measured Bell pairs rather than "
+        "assuming it was pre-shared. This is the quantum public key distribution stage "
+        "of the protocol."
+    )
+
+    st.header("Protocol")
+    st.markdown(
+        "1. A Bell state is prepared and split between Alice and Bob.\n"
+        "2. Each independently chooses a random measurement basis and measures.\n"
+        "3. Bases are disclosed over an authenticated public channel; mismatches are "
+        "discarded (**sifting**).\n"
+        "4. A random sample of surviving bits is disclosed to estimate the QBER, then "
+        "discarded.\n"
+        "5. The remainder becomes the key."
+    )
+    st.latex(r"|\Phi^+\rangle = \frac{1}{\sqrt{2}}\left(|00\rangle + |11\rangle\right)")
+    st.latex(
+        r"\langle Z\otimes Z\rangle = +1, \qquad "
+        r"\langle X\otimes X\rangle = +1, \qquad "
+        r"\langle Y\otimes Y\rangle = -1"
+    )
+    st.warning(
+        "The Y-basis correlation is NEGATIVE. Measuring Y on both halves of this Bell "
+        "state yields opposite outcomes, so Bob must invert his Y-basis results during "
+        "reconciliation. Omitting that inversion produces a 100% error rate on Y-sifted "
+        "positions."
+    )
+
+    st.header("Eavesdropper Detection")
+    st.latex(
+        r"\mathrm{QBER}_{\text{intercept-resend}} = "
+        r"\left(1 - \frac{1}{B}\right)\cdot\frac{1}{2}"
+    )
+    st.markdown(
+        "where B is the number of bases in use. Two bases give the textbook BB84 value "
+        "of **25%**; three bases give **33.3%**. An honest channel on an ideal simulator "
+        "yields QBER = 0, so any excess is eavesdropping or hardware noise."
+    )
+
+    st.header("Run Distribution")
+    qkd_col1, qkd_col2, qkd_col3 = st.columns(3)
+    with qkd_col1:
+        qkd_raw = st.select_slider(
+            "Bell pairs to distribute", options=[200, 400, 800, 1600, 3000], value=800
+        )
+    with qkd_col2:
+        qkd_basis_choice = st.radio(
+            "Measurement bases", options=["Z, X (BBM92 standard)", "Z, X, Y"], index=0
+        )
+    with qkd_col3:
+        qkd_eve = st.checkbox("Simulate intercept-resend eavesdropper", value=False)
+
+    qkd_bases = DEFAULT_QKD_BASES if qkd_basis_choice.startswith("Z, X (") else ALL_QKD_BASES
+
+    if st.button("RUN QUANTUM KEY DISTRIBUTION", type="primary"):
+        with st.spinner("Distributing and measuring Bell pairs..."):
+            qkd_res = run_key_distribution(
+                raw_bits=int(qkd_raw),
+                bases=qkd_bases,
+                eavesdropper_present=qkd_eve,
+                qber_sample_fraction=0.5,
+                baseline_error_rate=baseline_noise,
+                alpha=alpha,
+                target_key_length=None,
+                backend=active_backend_adapter,
+                seed=seed,
+            )
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Raw pairs", qkd_res.raw_bits)
+        m2.metric("Sifted bits", qkd_res.sifted_length)
+        m3.metric("Final key bits", len(qkd_res.key_bits))
+        expected_qber = (1 - 1 / len(qkd_bases)) * 0.5 if qkd_eve else 0.0
+        m4.metric(
+            "QBER",
+            f"{qkd_res.qber:.4f}",
+            delta=f"{qkd_res.qber - expected_qber:+.4f} vs theory",
+        )
+
+        if qkd_res.threat_result is not None:
+            if qkd_res.threat_result.threat_detected:
+                st.error(
+                    "EAVESDROPPER DETECTED — " + qkd_res.threat_result.interpretation
+                )
+                st.markdown("This key must be **discarded**, not used for signing.")
+            else:
+                st.success("CHANNEL CLEAN — " + qkd_res.threat_result.interpretation)
+
+        st.info(qkd_res.interpretation)
+
+        if qkd_res.key_bits:
+            st.markdown("**Established key (first 128 bits)**")
+            st.code("".join(str(b) for b in qkd_res.key_bits[:128]), language=None)
+            st.caption(
+                f"1-bit density: {sum(qkd_res.key_bits) / len(qkd_res.key_bits):.4f} "
+                f"(0.5 expected for a well-formed key)"
+            )
+
+        audit_logger.log_event(
+            event_type="KEY_DISTRIBUTION",
+            severity="CRITICAL" if (
+                qkd_res.threat_result and qkd_res.threat_result.threat_detected
+            ) else "INFO",
+            detail={
+                "raw_bits": qkd_res.raw_bits,
+                "sifted_length": qkd_res.sifted_length,
+                "qber": qkd_res.qber,
+                "bases": qkd_res.bases_used,
+                "eavesdropper_simulated": qkd_res.eavesdropper_present,
+            },
+        )
+
+    st.header("Scope Disclosure")
+    st.markdown(
+        "- Basis reconciliation is assumed to run over an **authenticated** public "
+        "classical channel, as BBM92 requires. Authenticating it is out of scope here.\n"
+        "- **No information reconciliation or privacy amplification** is implemented, so "
+        "the sifted key is not composably secure. This models the distribution and "
+        "eavesdropper-detection stages only.\n"
+        "- All QBER values come from executed Qiskit circuits; none are hardcoded."
+    )
+
+
+# =============================================================================
+#  SECTION 8: THREAT CLASSIFICATION
+# =============================================================================
+elif nav_section == "Threat Classification":
+    st.title("QUANTUM-INSPIRED THREAT CLASSIFICATION")
+    st.caption(
+        "Identifies WHICH threat is present, not merely that an anomaly occurred. "
+        "Forgery, impersonation, and different-message replay all produce ~50% errors, "
+        "so a pooled error rate cannot separate them."
+    )
+
+    st.header("How Discrimination Works")
+    st.markdown(
+        "The classifier scores the observed basis-resolved error profile "
+        "(e_Z, e_X, e_Y) against each threat's analytically derived signature, then "
+        "applies deterministic discriminators. No AI or ML is used."
+    )
+
+    st.dataframe(
+        [
+            {"Threat": "No attack", "e_Z": "p0", "e_X": "p0", "e_Y": "p0",
+             "MCC(E,K)": "~0", "Discriminator": "All bases at calibrated baseline"},
+            {"Threat": "Channel tampering", "e_Z": "p", "e_X": "~0", "e_Y": "p",
+             "MCC(E,K)": "~0", "Discriminator": "X-BASIS IMMUNITY (unique)"},
+            {"Threat": "Intercept-resend", "e_Z": "1/3", "e_X": "1/3", "e_Y": "1/3",
+             "MCC(E,K)": "~0", "Discriminator": "Uniform at 1/3"},
+            {"Threat": "Forgery", "e_Z": "rho", "e_X": "rho", "e_Y": "rho",
+             "MCC(E,K)": "~+1", "Discriminator": "Errors track K_i = 1"},
+            {"Threat": "Impersonation", "e_Z": "1/2", "e_X": "1/2", "e_Y": "1/2",
+             "MCC(E,K)": "~0", "Discriminator": "Uniform at 1/2, independent of K"},
+            {"Threat": "Replay (diff. msg)", "e_Z": "h", "e_X": "h", "e_Y": "h",
+             "MCC(E,K)": "~0", "Discriminator": "Classical digest mismatch"},
+            {"Threat": "Replay (same msg)", "e_Z": "p0", "e_X": "p0", "e_Y": "p0",
+             "MCC(E,K)": "~0", "Discriminator": "Nonce registry (deterministic)"},
+            {"Threat": "Unauthorized verify", "e_Z": "-", "e_X": "-", "e_Y": "-",
+             "MCC(E,K)": "-", "Discriminator": "HMAC validation (deterministic)"},
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    with st.expander("Why X-basis immunity identifies channel tampering"):
+        st.latex(r"\sigma_X|+\rangle = +|+\rangle, \qquad \sigma_X|-\rangle = -|-\rangle")
+        st.markdown(
+            "Both are X eigenstates, so an X-basis measurement is invariant up to a "
+            "global phase and records no error. Z and Y eigenstates are flipped. With "
+            "the uniform basis schedule, exactly 2/3 of positions are sensitive:"
+        )
+        st.latex(r"\hat{e} \to \tfrac{2}{3}\,p \qquad (e_Z, e_X, e_Y) \to (p, 0, p)")
+        st.markdown("No other modelled attack leaves an entire basis undisturbed.")
+
+    with st.expander("Why key correlation separates forgery from impersonation"):
+        st.markdown(
+            "A digest-only forger prepares states from d_i while the verifier expects "
+            "d_i XOR K_i. The two are orthogonal in the same basis exactly where "
+            "K_i = 1, producing a deterministic error there and none elsewhere. The "
+            "error indicator is therefore a copy of the key:"
+        )
+        st.latex(r"\mathrm{MCC}(E, K) \to +1 \quad\text{(forgery)}")
+        st.latex(r"\mathrm{MCC}(E, K) \to 0 \quad\text{(impersonation)}")
+
+    st.header("Statistical Resolution Limit")
+    res_n = minimum_trials_for_resolution(1.0 / 3.0, 0.5)
+    st.latex(
+        r"n \ge \frac{9\left(q_a(1-q_a) + q_b(1-q_b)\right)}{(q_a - q_b)^2}"
+    )
+    st.markdown(
+        f"The tightest pair is intercept-resend (1/3) against impersonation (1/2), "
+        f"requiring **n >= {res_n}** at 3 sigma. This is why classification is reliable "
+        f"at the full n = 256 and unreliable on small subsets — the classifier reports a "
+        f"resolution warning and scales confidence down when the sample is too small."
+    )
+
+    st.header("Live Classification")
+    clf_attack = st.selectbox(
+        "Attack scenario to classify",
+        options=[
+            "No Attack / Baseline",
+            "Channel Tampering",
+            "Signature Forgery",
+            "Impersonation",
+            "Quantum Interception",
+            "Replay Attack",
+        ],
+    )
+    clf_params: Dict[str, Any] = {}
+    if clf_attack == "Channel Tampering":
+        clf_params["p_attack"] = st.slider(
+            "Channel tampering probability p", 0.0, 1.0, 0.50, 0.05
+        )
+    elif clf_attack == "Quantum Interception":
+        clf_params["strategy"] = "uniform_random"
+    elif clf_attack == "Replay Attack":
+        clf_params["target_message"] = st.text_input(
+            "Message Bob is verifying", value=f"{message}_modified"
+        )
+
+    if st.button("RUN AND CLASSIFY", type="primary"):
+        with st.spinner("Executing circuits and profiling measurement statistics..."):
+            clf_res = _run_and_cache(clf_attack, clf_params)
+
+        _render_decision_banner(clf_res.decision)
+        st.markdown("---")
+        _render_classification_block(clf_res.classification)
+
+
+# =============================================================================
+#  SECTION 9: SECURITY BOUNDS (FORGERY PROBABILITY & DETECTION POWER)
+# =============================================================================
+elif nav_section == "Security Bounds":
+    st.title("SECURITY ANALYSIS — FORGERY BOUNDS & DETECTION POWER")
+    st.caption(
+        "Exact closed-form binomial quantities. Nothing here is simulated or estimated."
+    )
+
+    st.header("Forgery Probability")
+    st.markdown(
+        "An adversary without the secret key has no information about "
+        "b_i = d_i XOR K_i, because for a uniformly random K each b_i is uniform and "
+        "independent of the digest. The best available strategy is a coin flip at every "
+        "position. A signature is accepted when at most t = floor(s_a * n) positions "
+        "disagree, so:"
+    )
+    st.latex(
+        r"P_{\mathrm{forge}}(n, s_a) = "
+        r"\sum_{j=0}^{\lfloor s_a n \rfloor} \binom{n}{j} \left(\frac{1}{2}\right)^{n}"
+    )
+    st.markdown(
+        "This bound is **information-theoretic**: it holds against an adversary with "
+        "unbounded computational power, including a quantum computer, because the "
+        "adversary lacks information about K rather than facing a hard computation. "
+        "Shor's algorithm has nothing to attack."
+    )
+
+    bound_col1, bound_col2 = st.columns(2)
+    with bound_col1:
+        s_a_input = st.slider(
+            "Acceptance threshold s_a", 0.0, 0.25,
+            float(round(decision_thresholds.s_accept, 3)), 0.005,
+        )
+    with bound_col2:
+        key_density = sum(shared_key) / len(shared_key)
+        st.metric("Active key 1-bit density", f"{key_density:.4f}")
+
+    curve = forgery_bound_curve(
+        [8, 16, 32, 64, 128, 256, 512], acceptance_threshold=s_a_input
+    )
+    st.dataframe(
+        [
+            {
+                "n": c.signature_length,
+                "Max tolerated errors t": c.max_tolerated_errors,
+                "P_forge": f"{c.forgery_probability:.4e}",
+                "Security (bits)": (
+                    "inf" if math.isinf(c.security_bits) else f"{c.security_bits:.1f}"
+                ),
+            }
+            for c in curve
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    fig_fb, ax_fb = plt.subplots(figsize=(8, 4))
+    finite = [c for c in curve if not math.isinf(c.security_bits)]
+    ax_fb.plot(
+        [c.signature_length for c in finite],
+        [c.security_bits for c in finite],
+        marker="o", color="#EC4899", linewidth=2,
+    )
+    ax_fb.set_xlabel("Signature length n")
+    ax_fb.set_ylabel("Security level (bits)")
+    ax_fb.set_title("Forgery resistance grows linearly in bits (exponentially in probability)")
+    ax_fb.grid(True, alpha=0.3)
+    st.pyplot(fig_fb)
+    plt.close(fig_fb)
+
+    at_256 = forgery_success_probability(256, s_a_input)
+    st.success(f"At n = 256: {at_256.interpretation}")
+
+    if key_density < 0.4 or key_density > 0.6:
+        st.error(
+            f"KEY WARNING: the active key has 1-bit density {key_density:.4f}, not ~0.5. "
+            f"The bound above assumes a uniformly random key. A digest-only forger "
+            f"succeeds per-position with probability 1 - density = "
+            f"{1 - key_density:.4f}, so the real bound is weaker than shown."
+        )
+
+    st.header("Detection Power")
+    st.markdown(
+        "Power is the probability the exact binomial detector flags an attack of true "
+        "error rate q, given the critical count k* set by alpha:"
+    )
+    st.latex(r"k^{*} = \min\{k : \Pr[K \ge k \mid n, p_0] < \alpha\}")
+    st.latex(r"\mathrm{Power} = \Pr[K \ge k^{*} \mid n, q], \qquad "
+             r"\mathrm{Size} = \Pr[K \ge k^{*} \mid n, p_0]")
+
+    summary_rows = attack_detection_summary(256, baseline_noise, alpha)
+    st.dataframe(
+        [
+            {
+                "Attack": row["attack"],
+                "Analytic error rate q": f"{row['analytic_error_rate']:.4f}",
+                "Critical count k*": row["critical_errors"],
+                "Detection power": f"{row['detection_probability']:.6f}",
+                "False-positive rate": f"{row['false_positive_rate']:.4e}",
+            }
+            for row in summary_rows
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.markdown("**Power versus signature length**")
+    fig_dp, ax_dp = plt.subplots(figsize=(8, 4))
+    lengths = [8, 16, 32, 64, 128, 256, 512]
+    for label, q in [
+        ("Intercept-resend (q=1/3)", 1.0 / 3.0),
+        ("Forgery / Impersonation (q=1/2)", 0.5),
+        ("Channel tampering p=0.10 (q=0.067)", (2.0 / 3.0) * 0.10),
+    ]:
+        powers = detection_power_curve(lengths, baseline_noise, q, alpha)
+        ax_dp.plot(
+            lengths, [p.detection_probability for p in powers],
+            marker="o", linewidth=2, label=label,
+        )
+    ax_dp.axhline(0.99, linestyle="--", color="gray", alpha=0.6, label="99% power")
+    ax_dp.set_xscale("log", base=2)
+    ax_dp.set_xlabel("Signature length n")
+    ax_dp.set_ylabel("Detection probability")
+    ax_dp.set_ylim(-0.05, 1.05)
+    ax_dp.legend(fontsize=8)
+    ax_dp.grid(True, alpha=0.3)
+    st.pyplot(fig_dp)
+    plt.close(fig_dp)
+
+    st.header("Decision Thresholds In Force")
+    th = decision_thresholds
+    t1, t2, t3 = st.columns(3)
+    t1.metric("s_accept", f"{th.s_accept:.4f}")
+    t2.metric("s_reject", f"{th.s_reject:.4f}")
+    t3.metric("sigma", f"{th.sigma:.6f}")
+    st.caption(th.rationale)
+    st.markdown(
+        "- Error rate **<= s_accept** -> ACCEPT (a noiseless channel gives exactly 0, so "
+        "legitimate signatures are accepted deterministically).\n"
+        "- **Between** the thresholds -> ABORT (evidence too strong for noise, too weak "
+        "to attribute).\n"
+        "- **>= s_reject** -> REJECT."
+    )
+    st.warning(
+        "Honest limitation: channel tampering is a continuum at (2/3)p errors. At "
+        "p = 0.10 it lands in ABORT, and below the calibrated noise floor it is "
+        "information-theoretically indistinguishable from noise. No attack is ever "
+        "ACCEPTED except a bit-flip weaker than that floor, which forges nothing."
+    )
+
+
+# =============================================================================
+#  SECTION 10: PERFORMANCE & COMPLEXITY
+# =============================================================================
+elif nav_section == "Performance":
+    st.title("PERFORMANCE & COMPUTATIONAL COMPLEXITY")
+    st.caption(
+        "Measured, not asserted. Wall-clock timings vary by machine; the scaling "
+        "exponent is the reproducible quantity."
+    )
+
+    st.header("Analytic Complexity")
+    st.dataframe(
+        [
+            {"Stage": row["stage"], "Complexity": row["complexity"], "Note": row["note"]}
+            for row in build_complexity_table()
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.header("Empirical Scaling")
+    st.markdown(
+        "If duration T scales as T = c * n^k then log T = log c + k log n, so a "
+        "least-squares fit of log T against log n recovers the exponent k directly. "
+        "k ~ 1 confirms O(n)."
+    )
+    st.latex(r"\log T = \log c + k \log n")
+
+    perf_col1, perf_col2 = st.columns(2)
+    with perf_col1:
+        perf_sizes = st.multiselect(
+            "Signature lengths to time",
+            options=[8, 16, 32, 64, 128, 256],
+            default=[16, 32, 64, 128],
+        )
+    with perf_col2:
+        perf_repeats = st.slider("Timed repetitions per size (minimum kept)", 1, 5, 3)
+
+    st.caption(
+        "Methodology: one untimed warm-up pass, then the minimum of N timed runs. Timing "
+        "noise is strictly additive, so the fastest run is the closest estimate of true "
+        "cost. A single measurement per size can distort the fitted slope by 50% or more."
+    )
+
+    if st.button("RUN PERFORMANCE BENCHMARK", type="primary"):
+        if len(perf_sizes) < 2:
+            st.error("Select at least two signature lengths to fit a scaling exponent.")
+        else:
+            with st.spinner("Benchmarking..."):
+                analysis = analyze_verification_complexity(
+                    message=message,
+                    shared_key=shared_key,
+                    sizes=sorted(perf_sizes),
+                    session=active_session,
+                    backend=active_backend_adapter,
+                    seed=seed,
+                    repeats=int(perf_repeats),
+                )
+                enc_metrics = measure_encoding_performance(
+                    message=message, shared_key=shared_key, repetitions=200,
+                    session=active_session,
+                )
+
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Fitted exponent k", f"{analysis.log_log_slope:.3f}")
+            p2.metric("Fit quality R^2", f"{analysis.r_squared:.4f}")
+            p3.metric("Per-position cost", f"{analysis.per_qubit_seconds * 1000:.2f} ms")
+
+            if "O(n) linear" in analysis.classification:
+                st.success(f"CONFIRMED: {analysis.classification}")
+            else:
+                st.warning(
+                    f"Measured {analysis.classification}. Expected O(n); a deviation "
+                    f"usually indicates timing interference rather than a protocol change."
+                )
+
+            st.dataframe(
+                [
+                    {
+                        "n": size,
+                        "Duration (s)": f"{dur:.4f}",
+                        "Per position (ms)": f"{dur / size * 1000:.3f}",
+                    }
+                    for size, dur in zip(analysis.sizes, analysis.durations)
+                ],
+                width="stretch",
+                hide_index=True,
+            )
+
+            fig_pf, (ax_lin, ax_log) = plt.subplots(1, 2, figsize=(11, 4))
+            ax_lin.plot(analysis.sizes, analysis.durations, marker="o",
+                        color="#EC4899", linewidth=2)
+            ax_lin.set_xlabel("Signature length n")
+            ax_lin.set_ylabel("Duration (s)")
+            ax_lin.set_title("Linear scale")
+            ax_lin.grid(True, alpha=0.3)
+
+            ax_log.loglog(analysis.sizes, analysis.durations, marker="o",
+                          color="#A855F7", linewidth=2, label="measured")
+            ref = [analysis.durations[0] * (s / analysis.sizes[0]) for s in analysis.sizes]
+            ax_log.loglog(analysis.sizes, ref, linestyle="--", color="gray",
+                          label="ideal O(n)")
+            ax_log.set_xlabel("log n")
+            ax_log.set_ylabel("log T")
+            ax_log.set_title(f"Log-log fit: k = {analysis.log_log_slope:.3f}")
+            ax_log.legend(fontsize=8)
+            ax_log.grid(True, alpha=0.3, which="both")
+            st.pyplot(fig_pf)
+            plt.close(fig_pf)
+
+            st.header("Classical vs Quantum Cost")
+            st.markdown(
+                f"The classical stage (hash, XOR, basis schedule) costs "
+                f"**{enc_metrics.seconds_per_qubit * 1e6:.2f} microseconds** per position, "
+                f"against **{analysis.per_qubit_seconds * 1000:.2f} milliseconds** for "
+                f"circuit execution — roughly "
+                f"{analysis.per_qubit_seconds / max(enc_metrics.seconds_per_qubit, 1e-12):.0f}x "
+                f"cheaper. The constant factor is dominated by simulator overhead, not by "
+                f"protocol arithmetic."
+            )
+
+    st.header("Measurement Disclosures")
+    st.markdown(
+        "- Wall-clock timings characterise this host and this simulator; they are "
+        "reproducible in order of magnitude, not to the millisecond.\n"
+        "- Simulator measurements do **not** predict physical QPU runtime, where queue "
+        "latency dominates and is outside the protocol's control.\n"
+        "- The freshness and authorization checks add O(1) work and are invisible at "
+        "this resolution."
+    )
+
+
+# =============================================================================
+#  SECTION 11: SECURITY EVENT AUDIT LOG
+# =============================================================================
+elif nav_section == "Audit Log":
+    st.title("SECURITY EVENT AUDIT LOG")
+    st.caption(
+        "Append-only JSON Lines record of every verification, threat detection, "
+        "authorization denial, and key-establishment run."
+    )
+
+    summary = audit_logger.summary()
+
+    a1, a2, a3 = st.columns(3)
+    a1.metric("Total events", summary["total_events"])
+    a2.metric("Critical", summary["by_severity"].get("CRITICAL", 0))
+    a3.metric("Informational", summary["by_severity"].get("INFO", 0))
+
+    st.caption(f"Log file: {summary['log_path']}")
+    if not audit_enabled:
+        st.warning("Logging is currently disabled in the sidebar; no new events are written.")
+
+    if summary["total_events"] == 0:
+        st.info(
+            "No events recorded yet. Run an experiment in the Security Lab, Threat "
+            "Classification, or Key Distribution section to populate the log."
+        )
+    else:
+        st.markdown("**Event breakdown by type**")
+        st.dataframe(
+            [{"Event Type": k, "Count": v} for k, v in sorted(summary["by_type"].items())],
+            width="stretch",
+            hide_index=True,
+        )
+
+        st.header("Event Stream")
+        filter_col1, filter_col2 = st.columns(2)
+        with filter_col1:
+            sev_filter = st.multiselect(
+                "Severity", options=["INFO", "WARNING", "CRITICAL"],
+                default=["INFO", "WARNING", "CRITICAL"],
+            )
+        with filter_col2:
+            max_rows = st.slider("Maximum rows", 10, 500, 100, 10)
+
+        events = [
+            e for e in audit_logger.read_events(limit=int(max_rows))
+            if e.severity in sev_filter
+        ]
+
+        st.dataframe(
+            [
+                {
+                    "Timestamp (UTC)": e.timestamp,
+                    "Event": e.event_type,
+                    "Severity": e.severity,
+                    "Verdict": e.verdict or "-",
+                    "Digest": e.message_digest_prefix or "-",
+                    "Attack": e.detail.get("attack_name", "-"),
+                    "Classified As": e.detail.get("classified_as") or "-",
+                    "Error Rate": (
+                        f"{e.detail['observed_error_rate']:.4f}"
+                        if isinstance(e.detail.get("observed_error_rate"), (int, float))
+                        else "-"
+                    ),
+                    "p-value": (
+                        f"{e.detail['p_value']:.3e}"
+                        if isinstance(e.detail.get("p_value"), (int, float))
+                        else "-"
+                    ),
+                }
+                for e in reversed(events)
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+        with st.expander("Inspect a single event payload"):
+            if events:
+                chosen = st.selectbox(
+                    "Event",
+                    options=list(range(len(events))),
+                    format_func=lambda i: f"{events[i].timestamp} — {events[i].event_type}",
+                )
+                st.json({
+                    "event_id": events[chosen].event_id,
+                    "timestamp": events[chosen].timestamp,
+                    "event_type": events[chosen].event_type,
+                    "severity": events[chosen].severity,
+                    "verdict": events[chosen].verdict,
+                    "message_digest_prefix": events[chosen].message_digest_prefix,
+                    "detail": events[chosen].detail,
+                })
+
+        export_col1, export_col2 = st.columns(2)
+        with export_col1:
+            st.download_button(
+                "Download Audit Log (JSON)",
+                data=audit_logger.export_json(),
+                file_name="qds_security_events.json",
+                mime="application/json",
+            )
+        with export_col2:
+            if st.button("Clear Audit Log"):
+                audit_logger.clear()
+                st.rerun()
+
+    st.header("Secret Hygiene")
+    st.markdown(
+        "Key material is **never** written to the log. Only non-invertible derived "
+        "quantities are recorded: the key's 1-bit density, a 16-character digest prefix, "
+        "and the nonce (a public protocol value needed for replay forensics). Fields "
+        "matching known-sensitive names are replaced with `[REDACTED]` as defence in "
+        "depth, so the log is safe to export."
+    )
+    st.warning(
+        "The log is tamper-evident only insofar as the host filesystem is trusted. It is "
+        "not cryptographically chained and does not defend against an attacker holding "
+        "write access."
+    )
+
+
+# =============================================================================
+#  SECTION 12: REPRODUCIBILITY
 # =============================================================================
 elif nav_section == "Reproducibility":
     st.title("SCIENTIFIC DISCLOSURES & REPRODUCIBILITY")
@@ -2873,12 +4101,19 @@ elif nav_section == "Reproducibility":
         "message_M": message,
         "sha256_digest_bits": 256,
         "shared_key_mode": key_mode,
+        "shared_key_provenance": key_provenance,
         "shared_key_1_density": sum(shared_key) / 256,
         "random_seed": seed,
         "shots_per_qubit": shots_per_qubit,
         "baseline_error_rate_p0": baseline_noise,
         "significance_threshold_alpha": alpha,
         "execution_backend": execution_backend_mode,
+        "freshness_binding_enabled": freshness_enabled,
+        "audit_logging_enabled": audit_enabled,
+        "decision_threshold_s_accept": round(decision_thresholds.s_accept, 6),
+        "decision_threshold_s_reject": round(decision_thresholds.s_reject, 6),
+        "decision_threshold_sigma": round(decision_thresholds.sigma, 8),
+        "seed_derivation": "ShotSeeder (RNG-drawn per-shot seeds, not consecutive integers)",
     }
     st.json(config_dict)
 

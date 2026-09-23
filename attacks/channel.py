@@ -1,4 +1,4 @@
-"""
+﻿"""
 Quantum Channel Tampering Attack Simulation Module.
 
 SCIENTIFIC DISCLOSURES & THREAT MODEL:
@@ -19,9 +19,10 @@ from typing import List, Optional, Dict, Any
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
 from core.models import EncodedQubit, TeleportationResult, ThreatResult
 from core.backend import QuantumBackendAdapter
+from core.seeding import ShotSeeder
 from qds.states import apply_state_preparation, apply_basis_rotation
 from qds.encoding import encode_message
-from statistics.detector import detect_threat
+from qds_statistics.detector import detect_threat
 
 
 def apply_bit_flip_channel(
@@ -162,6 +163,7 @@ def run_single_qubit_channel_attack(
         backend = QuantumBackendAdapter("aer_simulator")
 
     rng = random.Random(seed) if seed is not None else None
+    seeder = ShotSeeder(seed)
 
     error_count = 0
     match_count = 0
@@ -173,8 +175,7 @@ def run_single_qubit_channel_attack(
             attack_probability=attack_probability,
             rng=rng,
         )
-        sim_seed = (seed + idx) if seed is not None else None
-        exec_res = backend.run_circuit(qc, shots=1, seed_simulator=sim_seed)
+        exec_res = backend.run_circuit(qc, shots=1, seed_simulator=seeder.next())
 
         memory_list = exec_res.get("memory", [])
         if memory_list:
@@ -260,6 +261,7 @@ def run_channel_attack(
         backend = QuantumBackendAdapter("aer_simulator")
 
     rng = random.Random(seed) if seed is not None else None
+    seeder = ShotSeeder(seed)
 
     total_trials = 0
     total_errors = 0
@@ -283,8 +285,7 @@ def run_channel_attack(
                 attack_probability=attack_probability,
                 force_x=x_injected,
             )
-            sim_seed = (seed + q_idx * shots_per_qubit + shot_idx) if seed is not None else None
-            exec_res = backend.run_circuit(qc, shots=1, seed_simulator=sim_seed)
+            exec_res = backend.run_circuit(qc, shots=1, seed_simulator=seeder.next())
 
             memory_list = exec_res.get("memory", [])
             if memory_list:
