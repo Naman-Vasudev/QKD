@@ -1,9 +1,9 @@
-"""
+﻿"""
 Unit Test Suite for Statistical Threat Detection Module.
 """
 
 import unittest
-from statistics.detector import calibrate_baseline, detect_threat
+from qds_statistics.detector import calibrate_baseline, detect_threat
 
 
 class TestStatisticalDetector(unittest.TestCase):

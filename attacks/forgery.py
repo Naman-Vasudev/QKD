@@ -1,4 +1,4 @@
-"""
+﻿"""
 Digital Signature Forgery Attack Simulation Module.
 
 SCIENTIFIC DISCLOSURES & THREAT MODEL:
@@ -18,9 +18,10 @@ SCIENTIFIC DISCLOSURES & THREAT MODEL:
 from typing import List, Optional, Dict, Any
 from core.models import EncodedQubit
 from core.backend import QuantumBackendAdapter
+from core.seeding import ShotSeeder
 from qds.encoding import encode_message
 from qds.teleportation import teleport_and_measure
-from statistics.detector import detect_threat
+from qds_statistics.detector import detect_threat
 
 
 def create_forged_encoded_qubits(message: str) -> List[EncodedQubit]:
@@ -89,6 +90,8 @@ def run_forgery_attack(
     if backend is None:
         backend = QuantumBackendAdapter("aer_simulator")
 
+    seeder = ShotSeeder(seed)
+
     # Theoretical expectation: mismatch occurs at index i where shared_key[i] == 1
     key_subset = [shared_key[idx] for idx in target_indices]
     theoretical_mismatch_rate = sum(key_subset) / len(key_subset)
@@ -103,14 +106,13 @@ def run_forgery_attack(
         forged_record = forged_qubits[idx]
 
         for shot_idx in range(shots_per_qubit):
-            sim_seed = (seed + q_idx * shots_per_qubit + shot_idx) if seed is not None else None
             # Teleport Eve's forged state and measure in Bob's legitimate expected basis
             res = teleport_and_measure(
                 state_label=forged_record.state_label,
                 basis=legit_record.basis,
                 expected_eigenvalue=legit_record.expected_eigenvalue,
                 backend=backend,
-                seed_simulator=sim_seed,
+                seed_simulator=seeder.next(),
             )
 
             total_trials += 1

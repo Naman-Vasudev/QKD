@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Select-String -Path app.py -Pattern '^def |^class |^# ===|st\\\\.sidebar\\\\.radio|^PAGE|^SECTION' | Select-Object -First 120 | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })"
+    ]
+  }
+}

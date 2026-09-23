@@ -8,6 +8,7 @@ from attacks.replay import (
     compute_digest_hamming_distance,
     run_replay_attack,
 )
+from qds.session import NonceRegistry, create_session
 from qds.verification import verify_signature
 
 
@@ -24,9 +25,10 @@ class TestReplayAttack(unittest.TestCase):
         self.assertEqual(len(captured), 256)
         self.assertEqual(captured[0].digest_bit ^ captured[0].key_bit, captured[0].encoded_bit)
 
-    def test_2_same_message_replay_accepted(self) -> None:
-        # Experiment A: Replaying signature for same message produces 0 verification errors
-        # Demonstrates that the protocol lacks a freshness mechanism (session nonce/timestamp)
+    def test_2_same_message_replay_undetectable_without_freshness(self) -> None:
+        # LEGACY MODE: with no SessionContext the encoding is deterministic, so a
+        # same-message replay produces zero errors and cannot be detected by measurement.
+        # Retained to document exactly what the freshness binding fixes.
         res = run_replay_attack(
             original_message="ABC",
             target_message="ABC",
@@ -35,10 +37,68 @@ class TestReplayAttack(unittest.TestCase):
             seed=100,
         )
         self.assertTrue(res["same_message"])
+        self.assertFalse(res["freshness_enabled"])
         self.assertEqual(res["total_errors"], 0)
         self.assertEqual(res["observed_error_rate"], 0.0)
         self.assertFalse(res["threat_result"].threat_detected)
-        self.assertIn("PROTOCOL PROPERTY", res["protocol_note"])
+        self.assertFalse(res["replay_detected_classically"])
+        self.assertIn("LEGACY MODE", res["protocol_note"])
+
+    def test_2b_same_message_replay_detected_with_nonce(self) -> None:
+        # PROTECTED MODE: the nonce registry catches the reuse deterministically, and does
+        # so before any quantum state is consumed.
+        session = create_session(signer_id="alice", counter=1)
+        registry = NonceRegistry()
+        res = run_replay_attack(
+            original_message="ABC",
+            target_message="ABC",
+            shared_key=self.key_balanced,
+            shots_per_qubit=1,
+            seed=101,
+            original_session=session,
+            nonce_registry=registry,
+        )
+        self.assertTrue(res["same_message"])
+        self.assertTrue(res["freshness_enabled"])
+        self.assertTrue(res["replay_detected_classically"])
+        self.assertTrue(res["quantum_verification_bypassed"])
+        self.assertIsNotNone(res["freshness_result"])
+        self.assertTrue(res["freshness_result"].replay_detected)
+        self.assertIn("REPLAY BLOCKED", res["protocol_note"])
+
+    def test_2c_first_use_of_nonce_is_accepted(self) -> None:
+        # Freshness must not reject a legitimate first presentation.
+        session = create_session(signer_id="alice", counter=1)
+        registry = NonceRegistry()
+        res = run_replay_attack(
+            original_message="ABC",
+            target_message="ABC",
+            shared_key=self.key_balanced,
+            shots_per_qubit=1,
+            seed=102,
+            original_session=session,
+            nonce_registry=registry,
+            original_already_verified=False,
+        )
+        self.assertFalse(res["replay_detected_classically"])
+        self.assertEqual(res["total_errors"], 0)
+        self.assertIn("FIRST USE", res["protocol_note"])
+
+    def test_2d_session_binding_changes_the_digest(self) -> None:
+        # The whole mechanism rests on the session altering the digest; verify it does.
+        session_a = create_session(signer_id="alice", counter=1, nonce="aa" * 16)
+        session_b = create_session(signer_id="alice", counter=2, nonce="bb" * 16)
+        dist_bound, frac_bound = compute_digest_hamming_distance(
+            "ABC", "ABC", session_a, session_b
+        )
+        self.assertGreater(dist_bound, 0)
+        # SHA-256 avalanche: two different sessions over the same message differ in ~50%
+        # of digest bits, which is what forces an attacker back to the forgery problem.
+        self.assertGreater(frac_bound, 0.3)
+        self.assertLess(frac_bound, 0.7)
+
+        dist_unbound, _ = compute_digest_hamming_distance("ABC", "ABC", None, None)
+        self.assertEqual(dist_unbound, 0)
 
     def test_3_different_message_replay_rejected(self) -> None:
         # Experiment B: Replaying signature for different message causes digest mismatch errors

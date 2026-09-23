@@ -5,6 +5,8 @@ qiskit-ibm-runtime>=0.49.0
 numpy>=2.0.0
 scipy>=1.15.0
 matplotlib>=3.10.0
-streamlit>=1.42.0
+# >=1.50 required: the UI uses width="stretch", which replaced the now-removed
+# use_container_width parameter on dataframes and buttons.
+streamlit>=1.50.0
 pylatexenc>=2.10
 pillow>=10.0.0
