@@ -1,4 +1,4 @@
-"""
+﻿"""
 Quantum Channel Interception (Intercept-Resend) Attack Simulation Module.
 
 SCIENTIFIC DISCLOSURES & THREAT MODEL:
@@ -24,9 +24,10 @@ from typing import List, Optional, Dict, Any, Tuple
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
 from core.models import EncodedQubit
 from core.backend import QuantumBackendAdapter
+from core.seeding import ShotSeeder
 from qds.states import apply_state_preparation, apply_basis_rotation, SUPPORTED_BASES
 from qds.encoding import encode_message
-from statistics.detector import detect_threat
+from qds_statistics.detector import detect_threat
 
 
 def select_eve_basis(
@@ -165,6 +166,7 @@ def run_single_qubit_interception_attack(
         backend = QuantumBackendAdapter("aer_simulator")
 
     rng = random.Random(seed) if seed is not None else None
+    seeder = ShotSeeder(seed)
 
     error_count = 0
     match_count = 0
@@ -183,8 +185,7 @@ def run_single_qubit_interception_attack(
             alice_basis=alice_basis,
             eve_basis=chosen_eve_basis,
         )
-        sim_seed = (seed + idx) if seed is not None else None
-        exec_res = backend.run_circuit(qc, shots=1, seed_simulator=sim_seed)
+        exec_res = backend.run_circuit(qc, shots=1, seed_simulator=seeder.next())
 
         memory_list = exec_res.get("memory", [])
         if memory_list:
@@ -273,6 +274,7 @@ def run_interception_attack(
         backend = QuantumBackendAdapter("aer_simulator")
 
     rng = random.Random(seed) if seed is not None else None
+    seeder = ShotSeeder(seed)
 
     total_trials = 0
     total_errors = 0
@@ -296,8 +298,7 @@ def run_interception_attack(
                 alice_basis=q_record.basis,
                 eve_basis=chosen_eve_basis,
             )
-            sim_seed = (seed + q_idx * shots_per_qubit + shot_idx) if seed is not None else None
-            exec_res = backend.run_circuit(qc, shots=1, seed_simulator=sim_seed)
+            exec_res = backend.run_circuit(qc, shots=1, seed_simulator=seeder.next())
 
             memory_list = exec_res.get("memory", [])
             if memory_list:
@@ -321,7 +322,11 @@ def run_interception_attack(
             detailed_results.append({
                 "qubit_index": q_record.index,
                 "state_label": q_record.state_label,
+                # "basis" is the schema-wide name for Bob's verification basis, consumed by
+                # the threat classifier; "alice_basis" is retained for backward compatibility.
+                "basis": q_record.basis,
                 "alice_basis": q_record.basis,
+                "key_bit": q_record.key_bit,
                 "eve_basis": chosen_eve_basis,
                 "same_basis": is_same_basis,
                 "expected_eigenvalue": q_record.expected_eigenvalue,
@@ -330,9 +335,17 @@ def run_interception_attack(
             })
 
     observed_error_rate = total_errors / total_trials
-    # Theoretical error rate: if uniform random basis selection, 1/3 of the time same basis (0% error),
-    # 2/3 of the time diff basis (50% error) => expected total error rate = 1/3 (~33.33%)
-    theoretical_error_rate = 1/3 if eve_basis_strategy is None else (0.0 if eve_basis_strategy == "MATCH_ALL" else 1/3)
+
+    # A-priori expectation. Eve's basis coincides with Alice's for 1/3 of positions (no
+    # disturbance) and differs for 2/3 (50% error):
+    #     E[error rate] = (1/3)(0) + (2/3)(1/2) = 1/3
+    # This holds for a fixed Eve basis as well as a uniformly random one, because the
+    # protocol's basis schedule (i % 3) visits Z, X, Y in equal proportion.
+    theoretical_error_rate = 1.0 / 3.0
+
+    # Conditional expectation given the basis draws that actually occurred. Tighter than
+    # the a-priori value because it removes the variance of Eve's basis sampling.
+    conditional_error_rate = (diff_basis_trials / total_trials) * 0.5
 
     threat_res = detect_threat(
         error_count=total_errors,
@@ -351,6 +364,7 @@ def run_interception_attack(
         "total_errors": total_errors,
         "observed_error_rate": observed_error_rate,
         "theoretical_expected_error_rate": theoretical_error_rate,
+        "conditional_expected_error_rate": conditional_error_rate,
         "same_basis_trials": same_basis_trials,
         "diff_basis_trials": diff_basis_trials,
         "baseline_error_rate": baseline_error_rate,

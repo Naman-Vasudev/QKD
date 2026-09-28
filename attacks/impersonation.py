@@ -1,4 +1,4 @@
-"""
+﻿"""
 Digital Signature Impersonation Attack Simulation Module.
 
 SCIENTIFIC DISCLOSURES & THREAT MODEL:
@@ -18,9 +18,10 @@ import random
 from typing import List, Optional, Dict, Any, Tuple
 from core.models import EncodedQubit
 from core.backend import QuantumBackendAdapter
+from core.seeding import ShotSeeder
 from qds.encoding import encode_message
 from qds.teleportation import teleport_and_measure
-from statistics.detector import detect_threat
+from qds_statistics.detector import detect_threat
 
 
 def create_impersonation_encoded_qubits(
@@ -80,6 +81,7 @@ def run_impersonation_attack(
         raise ValueError(f"Secret key must contain exactly 256 bits, got {len(shared_key)}.")
 
     rng = random.Random(seed) if seed is not None else None
+    seeder = ShotSeeder(seed)
 
     # 1. Legitimate expected qubits (prepared with secret key K)
     legitimate_qubits = encode_message(message, shared_key)
@@ -108,14 +110,13 @@ def run_impersonation_attack(
         impersonated_record = impersonation_qubits[idx]
 
         for shot_idx in range(shots_per_qubit):
-            sim_seed = (seed + q_idx * shots_per_qubit + shot_idx) if seed is not None else None
             # Teleport Eve's impersonated state and measure in Bob's legitimate expected basis
             res = teleport_and_measure(
                 state_label=impersonated_record.state_label,
                 basis=legit_record.basis,
                 expected_eigenvalue=legit_record.expected_eigenvalue,
                 backend=backend,
-                seed_simulator=sim_seed,
+                seed_simulator=seeder.next(),
             )
 
             total_trials += 1

@@ -29,6 +29,12 @@ from .replay import (
     compute_digest_hamming_distance,
     run_replay_attack,
 )
+from .unauthorized import (
+    ATTACKER_PROFILES,
+    build_attacker_token,
+    run_unauthorized_verification_attack,
+    run_authorization_profile_sweep,
+)
 
 __all__ = [
     "apply_bit_flip_channel",
@@ -45,5 +51,9 @@ __all__ = [
     "capture_legitimate_signature",
     "compute_digest_hamming_distance",
     "run_replay_attack",
+    "ATTACKER_PROFILES",
+    "build_attacker_token",
+    "run_unauthorized_verification_attack",
+    "run_authorization_profile_sweep",
 ]
 

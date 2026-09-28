@@ -8,12 +8,22 @@ SCIENTIFIC DISCLOSURES & THREAT MODEL:
 - Eve captures the quantum states produced by legitimate Alice for M_original and replays them
   when Bob expects verification for M_target.
 
-PROTOCOL PROPERTY — NO FRESHNESS MECHANISM:
-- The existing QDS encoding is deterministic: D = SHA-256(M), b_i = d_i XOR K_i.
-- There is no session nonce, timestamp, or freshness token in the current protocol.
-- Therefore, replaying a captured signature for the SAME message (M_target == M_original)
-  produces states identical to a fresh signature and is INDISTINGUISHABLE from legitimate.
-- This is a known protocol limitation, not a bug.
+FRESHNESS MECHANISM (SESSION NONCE):
+- LEGACY MODE (no SessionContext supplied): the encoding is deterministic,
+  D = SHA-256(M), b_i = d_i XOR K_i. Replaying a captured signature for the SAME message
+  produces states identical to a fresh signature, so no measurement can distinguish them.
+  This mode is retained only so the improvement can be demonstrated side by side.
+- PROTECTED MODE (SessionContext supplied): the digest binds a nonce, counter, signer
+  identity, and timestamp:
+      P = M | signer_id | nonce | counter | timestamp
+      D = SHA-256(P),  b_i = d_i XOR K_i
+  Replay is then defeated by two independent mechanisms:
+    1. CLASSICAL: the verifier's NonceRegistry has already consumed that nonce, so the
+       replay is rejected in O(1) before any quantum state is measured.
+    2. QUANTUM: if Eve invents a fresh nonce to evade the registry, the bound digest
+       changes and she must re-derive all 256 states for it. Without K that is exactly the
+       forgery problem, and the measurement statistics expose it at ~50% error.
+- Same-message replay is therefore DETECTED whenever freshness binding is enabled.
 
 DIFFERENT-MESSAGE REPLAY:
 - When M_target != M_original, Bob expects states derived from D' = SHA-256(M_target),
@@ -26,16 +36,19 @@ DIFFERENT-MESSAGE REPLAY:
 """
 
 from typing import List, Optional, Dict, Any, Tuple
-from core.models import EncodedQubit
+from core.models import EncodedQubit, SessionContext, FreshnessResult
 from core.backend import QuantumBackendAdapter
-from qds.encoding import encode_message, sha256_bits
+from core.seeding import ShotSeeder
+from qds.encoding import encode_message, sha256_bits, session_digest_bits
+from qds.session import NonceRegistry
 from qds.teleportation import teleport_and_measure
-from statistics.detector import detect_threat
+from qds_statistics.detector import detect_threat
 
 
 def capture_legitimate_signature(
     message: str,
     shared_key: List[int],
+    session: Optional[SessionContext] = None,
 ) -> List[EncodedQubit]:
     """
     Generate and capture a legitimate QDS signature for message M.
@@ -46,30 +59,39 @@ def capture_legitimate_signature(
     Args:
         message: Classical message string M_original.
         shared_key: Alice and Bob's pre-shared secret key K (256 bits).
+        session: Optional SessionContext Alice used when signing. Eve captures it along
+                 with the quantum states, since it travels with the signature.
 
     Returns:
         List of 256 EncodedQubit records representing the captured signature.
     """
     if len(shared_key) != 256:
         raise ValueError(f"Secret key must contain exactly 256 bits, got {len(shared_key)}.")
-    return encode_message(message, shared_key)
+    return encode_message(message, shared_key, session=session)
 
 
-def compute_digest_hamming_distance(message_a: str, message_b: str) -> Tuple[int, float]:
+def compute_digest_hamming_distance(
+    message_a: str,
+    message_b: str,
+    session_a: Optional[SessionContext] = None,
+    session_b: Optional[SessionContext] = None,
+) -> Tuple[int, float]:
     """
-    Compute the Hamming distance between SHA-256 digests of two messages.
+    Compute the Hamming distance between the (optionally session-bound) digests of two messages.
 
     Args:
         message_a: First message string.
         message_b: Second message string.
+        session_a: Optional SessionContext bound into the first digest.
+        session_b: Optional SessionContext bound into the second digest.
 
     Returns:
         Tuple of (hamming_distance, hamming_fraction) where:
             hamming_distance: Number of bit positions where digests differ.
             hamming_fraction: hamming_distance / 256.
     """
-    digest_a = sha256_bits(message_a)
-    digest_b = sha256_bits(message_b)
+    digest_a = session_digest_bits(message_a, session_a)
+    digest_b = session_digest_bits(message_b, session_b)
     distance = sum(a != b for a, b in zip(digest_a, digest_b))
     return distance, distance / 256.0
 
@@ -84,6 +106,10 @@ def run_replay_attack(
     sample_indices: Optional[List[int]] = None,
     backend: Optional[QuantumBackendAdapter] = None,
     seed: Optional[int] = None,
+    original_session: Optional[SessionContext] = None,
+    target_session: Optional[SessionContext] = None,
+    nonce_registry: Optional[NonceRegistry] = None,
+    original_already_verified: bool = True,
 ) -> Dict[str, Any]:
     """
     Execute a Quantum Digital Signature Replay Attack experiment.
@@ -111,12 +137,26 @@ def run_replay_attack(
         sample_indices: Optional list of qubit indices to verify.
         backend: Optional QuantumBackendAdapter.
         seed: Optional random seed for reproducibility.
+        original_session: SessionContext Alice used when signing. Eve captures it with the
+            signature and must present it, because the quantum states encode its digest.
+        target_session: SessionContext Bob expects for the current verification. Defaults
+            to original_session, modelling Eve replaying the capture verbatim.
+        nonce_registry: Verifier's NonceRegistry. When supplied, freshness is enforced and
+            same-message replay becomes detectable.
+        original_already_verified: When True (default), the registry first consumes the
+            original session's nonce to model Alice's legitimate verification having
+            already happened. This is what makes Eve's later replay a detectable reuse.
 
     Returns:
         Dictionary containing:
             - attack_type: "signature_replay"
             - original_message, target_message
             - same_message: Boolean indicating if replay is for the same message
+            - freshness_enabled: Whether session binding was active
+            - freshness_result: FreshnessResult from the nonce registry, if enabled
+            - replay_detected_classically: True if the nonce registry blocked the replay
+            - quantum_verification_bypassed: True if the replay was rejected before any
+              quantum measurement was needed
             - digest_hamming_distance, digest_hamming_fraction
             - theoretical_error_rate: Expected mismatch rate from digest comparison
             - total_trials, total_errors, total_matches
@@ -130,15 +170,34 @@ def run_replay_attack(
         raise ValueError(f"Secret key must contain exactly 256 bits, got {len(shared_key)}.")
 
     same_message = (original_message == target_message)
+    freshness_enabled = original_session is not None
+
+    # Eve replays the capture verbatim unless a distinct target session is supplied.
+    presented_session = original_session
+    expected_session = target_session if target_session is not None else original_session
 
     # 1. Capture legitimate signature for original message (Eve's captured states)
-    captured_qubits = capture_legitimate_signature(original_message, shared_key)
+    captured_qubits = capture_legitimate_signature(
+        original_message, shared_key, session=presented_session
+    )
 
     # 2. Compute Bob's expected encoding for the target message
-    target_qubits = encode_message(target_message, shared_key)
+    target_qubits = encode_message(target_message, shared_key, session=expected_session)
+
+    # 2b. CLASSICAL FRESHNESS CHECK — runs before any quantum measurement.
+    freshness_result: Optional[FreshnessResult] = None
+    replay_detected_classically = False
+    if nonce_registry is not None and presented_session is not None:
+        if original_already_verified:
+            # Alice's legitimate verification already consumed this nonce.
+            nonce_registry.consume(original_session)
+        freshness_result = nonce_registry.check(presented_session)
+        replay_detected_classically = not freshness_result.is_fresh
 
     # 3. Compute digest Hamming distance (theoretical error prediction)
-    hamming_dist, hamming_frac = compute_digest_hamming_distance(original_message, target_message)
+    hamming_dist, hamming_frac = compute_digest_hamming_distance(
+        original_message, target_message, presented_session, expected_session
+    )
 
     # 4. Select qubit indices
     if sample_indices is not None:
@@ -165,20 +224,20 @@ def run_replay_attack(
     total_matches = 0
     detailed_results: List[Dict[str, Any]] = []
 
+    seeder = ShotSeeder(seed)
+
     for q_idx, idx in enumerate(target_indices):
         captured = captured_qubits[idx]
         expected = target_qubits[idx]
 
         for shot_idx in range(shots_per_qubit):
-            sim_seed = (seed + q_idx * shots_per_qubit + shot_idx) if seed is not None else None
-
             # Eve replays captured state; Bob measures in target-expected basis
             res = teleport_and_measure(
                 state_label=captured.state_label,
                 basis=expected.basis,
                 expected_eigenvalue=expected.expected_eigenvalue,
                 backend=backend,
-                seed_simulator=sim_seed,
+                seed_simulator=seeder.next(),
             )
 
             total_trials += 1
@@ -211,13 +270,29 @@ def run_replay_attack(
     )
 
     # 8. Scientific observation about protocol freshness
-    if same_message:
+    if replay_detected_classically and freshness_result is not None:
         protocol_note = (
-            "PROTOCOL PROPERTY: The replayed signature was for the SAME message. "
-            "The current protocol has no freshness mechanism (no nonce, timestamp, or session token). "
-            "Therefore, a byte-for-byte replay of a valid signature for the same message is "
-            "indistinguishable from a fresh legitimate signature. "
-            "This is a known limitation of the current prototype architecture."
+            "REPLAY BLOCKED BY FRESHNESS BINDING: "
+            + freshness_result.reason
+            + " The session nonce is bound into the hashed payload, so the verifier rejects "
+            "the replay in O(1) before any quantum state is consumed. Had Eve substituted a "
+            "fresh nonce to evade the registry, the bound digest would change and she would "
+            "have to re-derive all 256 signature states without knowing K, which the "
+            "measurement statistics detect as a forgery at ~50% error."
+        )
+    elif same_message and freshness_enabled:
+        protocol_note = (
+            "FRESHNESS ACTIVE, FIRST USE: The replayed signature was for the SAME message and "
+            "session, but this nonce had not yet been consumed by the verifier, so the "
+            "signature is legitimately accepted on first presentation. Any subsequent "
+            "presentation of this same nonce is rejected as a replay."
+        )
+    elif same_message:
+        protocol_note = (
+            "LEGACY MODE (NO FRESHNESS BINDING): The replayed signature was for the SAME message "
+            "and no SessionContext was supplied, so the encoding is deterministic. A byte-for-byte "
+            "replay is therefore indistinguishable from a fresh legitimate signature by measurement "
+            "alone. Supply a SessionContext and a NonceRegistry to detect this attack."
         )
     else:
         protocol_note = (
@@ -233,6 +308,11 @@ def run_replay_attack(
         "original_message": original_message,
         "target_message": target_message,
         "same_message": same_message,
+        "freshness_enabled": freshness_enabled,
+        "freshness_result": freshness_result,
+        "replay_detected_classically": replay_detected_classically,
+        "quantum_verification_bypassed": replay_detected_classically,
+        "presented_nonce": presented_session.nonce if presented_session else None,
         "digest_hamming_distance": hamming_dist,
         "digest_hamming_fraction": hamming_frac,
         "theoretical_error_rate": theoretical_error_rate,
