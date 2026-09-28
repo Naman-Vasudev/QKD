@@ -280,6 +280,16 @@ def run_replay_attack(
             "have to re-derive all 256 signature states without knowing K, which the "
             "measurement statistics detect as a forgery at ~50% error."
         )
+    elif same_message and freshness_enabled and hamming_dist > 0:
+        protocol_note = (
+            "SESSION MISMATCH (FRESH-NONCE EVASION): The message is unchanged, but the "
+            "captured signature was bound to a different session than the one the verifier "
+            f"expects, so the bound digests differ in {hamming_dist}/256 positions "
+            f"({hamming_frac:.4f}). An attacker who substitutes a fresh nonce to slip past "
+            "the registry therefore has to supply states for a digest she cannot compute "
+            "without K. That is the forgery problem, and the measurement statistics expose "
+            "it at roughly 50% error."
+        )
     elif same_message and freshness_enabled:
         protocol_note = (
             "FRESHNESS ACTIVE, FIRST USE: The replayed signature was for the SAME message and "

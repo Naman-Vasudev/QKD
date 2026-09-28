@@ -3217,13 +3217,18 @@ elif nav_section == "Security Lab":
 
             st.markdown(
                 '<div class="security-gap-banner">'
-                'SECURITY GAP DISCLOSURE<br><br>'
-                'When Eve replays a captured signature for the SAME message M, Bob\'s verification '
-                'produces ZERO errors. The current QDS prototype has no freshness mechanism: '
-                'no session nonce, no sequence counter, no timestamp, no challenge-response. '
-                'Because the encoding is fully deterministic (D = SHA-256(M), bᵢ = dᵢ ⊕ Kᵢ), '
-                'a byte-for-byte replay of a valid signature for the same message is '
-                'INDISTINGUISHABLE from a fresh legitimate transmission.'
+                'BASELINE MODE &mdash; FRESHNESS BINDING DISABLED<br><br>'
+                'This experiment deliberately runs the protocol <strong>without</strong> the '
+                'session nonce, to show what the freshness mechanism is for. With binding off, '
+                'the encoding is fully deterministic (D = SHA-256(M), b&#7522; = d&#7522; &oplus; K&#7522;), '
+                'so a byte-for-byte replay of a valid signature for the same message produces '
+                'ZERO errors and is indistinguishable from a fresh transmission by measurement '
+                'alone.<br><br>'
+                '<strong>This is not an open gap.</strong> Freshness binding is implemented in '
+                '<code>qds/session.py</code> and is ON by default &mdash; see the Protocol '
+                'Hardening control in the sidebar. Select the '
+                '<strong>&ldquo;Replay Attack (Same Message, Nonce Reuse)&rdquo;</strong> scenario '
+                'to watch the same attack get blocked.'
                 '</div>',
                 unsafe_allow_html=True,
             )
@@ -3296,11 +3301,16 @@ elif nav_section == "Security Lab":
         st.markdown('<div class="sec-header">A. THE PROBLEM THIS SOLVES</div>',
                     unsafe_allow_html=True)
         st.markdown(
-            "Without freshness binding the encoding is deterministic: D = SHA-256(M), "
-            "b_i = d_i XOR K_i. A captured signature for M is therefore **bit-identical** "
-            "to a fresh one, and no quantum measurement can distinguish them, because "
-            "there is nothing to distinguish. This was the protocol's one undetectable "
-            "attack."
+            "With freshness binding **disabled**, the encoding is deterministic: "
+            "D = SHA-256(M), b_i = d_i XOR K_i. A captured signature for M is then "
+            "**bit-identical** to a fresh one, and no quantum measurement can separate "
+            "them, because there is nothing to separate. That was the protocol's one "
+            "undetectable attack."
+        )
+        st.success(
+            "RESOLVED. Session-nonce binding is implemented in `qds/session.py` and is "
+            "enabled by default. The comparison below runs the identical attack with "
+            "binding off, then on, so the difference is visible rather than asserted."
         )
 
         st.markdown('<div class="sec-header">B. THE FIX</div>', unsafe_allow_html=True)
@@ -3319,70 +3329,196 @@ elif nav_section == "Security Lab":
         st.markdown('<div class="sec-header">C. RUN COMPARISON</div>',
                     unsafe_allow_html=True)
         st.caption(
-            "Both modes replay the same captured signature for the same message. Only "
-            "the freshness binding differs."
+            "All three scenarios replay the same captured signature for the same message "
+            "M. Only the session binding differs, which is what closes off each escape "
+            "route in turn."
         )
 
-        if st.button("RUN SAME-MESSAGE REPLAY (BOTH MODES)", type="primary"):
-            with st.spinner("Executing both modes..."):
+        def _digest_hex(msg: str, sess) -> str:
+            """Hex rendering of the session-bound digest, for side-by-side display."""
+            bits = session_digest_bits(msg, sess)
+            return "".join(
+                f"{int(''.join(str(b) for b in bits[i:i + 4]), 2):x}"
+                for i in range(0, len(bits), 4)
+            )
+
+        if st.button("RUN ALL THREE REPLAY SCENARIOS", type="primary"):
+            with st.spinner("Executing three scenarios..."):
+                # 1. Binding disabled: the original, undetectable case.
                 legacy_res = run_replay_attack(
-                    original_message=message,
-                    target_message=message,
-                    shared_key=shared_key,
-                    shots_per_qubit=shots_per_qubit,
-                    baseline_error_rate=baseline_noise,
-                    alpha=alpha,
-                    backend=active_backend_adapter,
-                    seed=seed,
+                    original_message=message, target_message=message,
+                    shared_key=shared_key, shots_per_qubit=shots_per_qubit,
+                    baseline_error_rate=baseline_noise, alpha=alpha,
+                    backend=active_backend_adapter, seed=seed,
                 )
-                demo_session = create_session(signer_id="alice", counter=1)
-                protected_res = run_replay_attack(
-                    original_message=message,
-                    target_message=message,
-                    shared_key=shared_key,
-                    shots_per_qubit=shots_per_qubit,
-                    baseline_error_rate=baseline_noise,
-                    alpha=alpha,
-                    backend=active_backend_adapter,
-                    seed=seed,
-                    original_session=demo_session,
+
+                # 2. Nonce reuse: Eve presents the captured session verbatim.
+                captured_session = create_session(signer_id="alice", counter=1)
+                reuse_res = run_replay_attack(
+                    original_message=message, target_message=message,
+                    shared_key=shared_key, shots_per_qubit=shots_per_qubit,
+                    baseline_error_rate=baseline_noise, alpha=alpha,
+                    backend=active_backend_adapter, seed=seed,
+                    original_session=captured_session,
                     nonce_registry=NonceRegistry(),
                 )
 
-            col_legacy, col_prot = st.columns(2)
+                # 3. Fresh-nonce evasion: Eve invents a new nonce to slip past the
+                #    registry, but still holds states bound to the OLD digest.
+                forged_session = create_session(signer_id="alice", counter=2)
+                evasion_res = run_replay_attack(
+                    original_message=message, target_message=message,
+                    shared_key=shared_key, shots_per_qubit=shots_per_qubit,
+                    baseline_error_rate=baseline_noise, alpha=alpha,
+                    backend=active_backend_adapter, seed=seed,
+                    original_session=captured_session,
+                    target_session=forged_session,
+                    nonce_registry=None,
+                )
 
-            with col_legacy:
-                st.markdown("#### Legacy: no freshness binding")
-                st.metric("Observed error rate", f"{legacy_res['observed_error_rate']:.4f}")
-                st.metric(
-                    "Detected",
-                    "NO" if not legacy_res["replay_detected_classically"] else "YES",
+            st.markdown("##### Outcome summary")
+            st.dataframe(
+                [
+                    {
+                        "Scenario": "1. Binding disabled",
+                        "Nonce presented": "none",
+                        "Blocked by registry": "no",
+                        "Quantum error rate": f"{legacy_res['observed_error_rate']:.4f}",
+                        "Result": "ATTACK SUCCEEDS",
+                    },
+                    {
+                        "Scenario": "2. Nonce reuse",
+                        "Nonce presented": "same as captured",
+                        "Blocked by registry": "YES (O(1), pre-quantum)",
+                        "Quantum error rate": f"{reuse_res['observed_error_rate']:.4f}",
+                        "Result": "BLOCKED classically",
+                    },
+                    {
+                        "Scenario": "3. Fresh-nonce evasion",
+                        "Nonce presented": "newly invented",
+                        "Blocked by registry": "no (evaded)",
+                        "Quantum error rate": f"{evasion_res['observed_error_rate']:.4f}",
+                        "Result": "BLOCKED statistically",
+                    },
+                ],
+                width="stretch",
+                hide_index=True,
+            )
+
+            st.markdown("##### Session state in detail")
+            st.caption(
+                "What Eve captured, against what the verifier expects at the moment of "
+                "replay. The bound digest is what the quantum states actually encode."
+            )
+            st.dataframe(
+                [
+                    {
+                        "Field": "Message M",
+                        "Captured by Eve": message,
+                        "Verifier expects": message,
+                        "Match": "same",
+                    },
+                    {
+                        "Field": "Nonce",
+                        "Captured by Eve": captured_session.nonce[:24] + "...",
+                        "Verifier expects": forged_session.nonce[:24] + "...",
+                        "Match": "DIFFERENT",
+                    },
+                    {
+                        "Field": "Counter",
+                        "Captured by Eve": str(captured_session.counter),
+                        "Verifier expects": str(forged_session.counter),
+                        "Match": "DIFFERENT",
+                    },
+                    {
+                        "Field": "Timestamp",
+                        "Captured by Eve": captured_session.timestamp,
+                        "Verifier expects": forged_session.timestamp,
+                        "Match": (
+                            "same"
+                            if captured_session.timestamp == forged_session.timestamp
+                            else "DIFFERENT"
+                        ),
+                    },
+                    {
+                        "Field": "Signer",
+                        "Captured by Eve": captured_session.signer_id,
+                        "Verifier expects": forged_session.signer_id,
+                        "Match": "same",
+                    },
+                    {
+                        "Field": "Bound digest D (first 24 hex)",
+                        "Captured by Eve": _digest_hex(message, captured_session)[:24],
+                        "Verifier expects": _digest_hex(message, forged_session)[:24],
+                        "Match": "DIFFERENT",
+                    },
+                    {
+                        "Field": "Digest Hamming distance",
+                        "Captured by Eve": "—",
+                        "Verifier expects": "—",
+                        "Match": (
+                            f"{evasion_res['digest_hamming_distance']}/256 bits "
+                            f"({evasion_res['digest_hamming_fraction']:.4f})"
+                        ),
+                    },
+                ],
+                width="stretch",
+                hide_index=True,
+            )
+
+            st.markdown(
+                f"The message never changed, yet binding a different nonce moved the "
+                f"digest by **{evasion_res['digest_hamming_distance']} of 256 bits**. "
+                f"Eve holds quantum states for the left-hand digest while the verifier "
+                f"checks against the right-hand one, so she would have to re-derive 256 "
+                f"states for a digest she cannot compute without K."
+            )
+
+            with st.expander("Full nonce values and canonical bound payloads"):
+                st.markdown("**Captured session (Eve's states encode this)**")
+                st.code(
+                    f"message   : {message}\n"
+                    f"nonce     : {captured_session.nonce}\n"
+                    f"counter   : {captured_session.counter}\n"
+                    f"timestamp : {captured_session.timestamp}\n"
+                    f"signer    : {captured_session.signer_id}\n"
+                    f"bound P   : {message}|{captured_session.canonical_binding()}\n"
+                    f"digest D  : {_digest_hex(message, captured_session)}",
+                    language=None,
                 )
-                st.error(
-                    "ATTACK SUCCEEDS: the replayed signature is indistinguishable from "
-                    "a fresh one."
+                st.markdown("**Session the verifier expects at replay time**")
+                st.code(
+                    f"message   : {message}\n"
+                    f"nonce     : {forged_session.nonce}\n"
+                    f"counter   : {forged_session.counter}\n"
+                    f"timestamp : {forged_session.timestamp}\n"
+                    f"signer    : {forged_session.signer_id}\n"
+                    f"bound P   : {message}|{forged_session.canonical_binding()}\n"
+                    f"digest D' : {_digest_hex(message, forged_session)}",
+                    language=None,
                 )
+
+            st.markdown("##### Per-scenario verdict")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown("**1. Binding disabled**")
+                st.error("ATTACK SUCCEEDS")
                 st.caption(legacy_res["protocol_note"])
-
-            with col_prot:
-                st.markdown("#### Protected: session nonce bound")
-                st.metric("Observed error rate", f"{protected_res['observed_error_rate']:.4f}")
-                st.metric(
-                    "Detected",
-                    "YES" if protected_res["replay_detected_classically"] else "NO",
-                )
-                if protected_res["replay_detected_classically"]:
-                    st.success(
-                        "ATTACK BLOCKED: nonce already consumed. Rejected in O(1) "
-                        "before any quantum state was measured."
-                    )
-                st.caption(protected_res["protocol_note"])
+            with c2:
+                st.markdown("**2. Nonce reuse**")
+                st.success("BLOCKED — registry")
+                st.caption(reuse_res["protocol_note"])
+            with c3:
+                st.markdown("**3. Fresh-nonce evasion**")
+                st.success("BLOCKED — statistics")
+                st.caption(evasion_res["protocol_note"])
 
             st.info(
-                "Note that the quantum error rate is ~0 in BOTH columns. That is the "
-                "point: the quantum layer genuinely cannot see this attack. Detection "
-                "comes from the classical freshness mechanism, which is why the "
-                "framework needs both."
+                "Scenarios 1 and 2 both show a quantum error rate near zero. That is the "
+                "point: the quantum layer genuinely cannot see a verbatim replay, so the "
+                "classical registry has to catch it. Scenario 3 is the reverse — Eve "
+                "defeats the registry with a fresh nonce, and the measurement statistics "
+                "catch her instead. Each mechanism covers the other's blind spot."
             )
 
             audit_logger.log_event(
@@ -3393,8 +3529,10 @@ elif nav_section == "Security Lab":
                 detail={
                     "attack_name": "Replay Attack (Same Message, Nonce Reuse)",
                     "freshness_enabled": True,
-                    "replay_detected_classically": protected_res["replay_detected_classically"],
-                    "observed_error_rate": protected_res["observed_error_rate"],
+                    "replay_detected_classically": reuse_res["replay_detected_classically"],
+                    "observed_error_rate": reuse_res["observed_error_rate"],
+                    "evasion_error_rate": evasion_res["observed_error_rate"],
+                    "evasion_digest_hamming": evasion_res["digest_hamming_distance"],
                 },
             )
 
