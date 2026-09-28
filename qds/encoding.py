@@ -6,11 +6,15 @@ SCIENTIFIC DISCLOSURES:
 - SHA-256 does NOT constitute a quantum digital signature by itself.
 - The pre-shared secret key K is required to provide authentication and unforgeability;
   without K, anyone could construct valid quantum states for an arbitrary digest.
+- An optional SessionContext binds a nonce, counter, and signer identity into the hashed
+  payload to provide replay resistance. When no session is supplied the encoding is
+  bit-for-bit identical to the original freshness-free protocol.
 """
 
 import hashlib
-from typing import List
-from core.models import EncodedQubit
+from typing import List, Optional
+from core.models import EncodedQubit, SessionContext
+from .session import bind_session
 
 
 def sha256_bits(message: str) -> List[int]:
@@ -31,12 +35,44 @@ def sha256_bits(message: str) -> List[int]:
     return bits
 
 
-def encode_message(message: str, key_bits: List[int]) -> List[EncodedQubit]:
+def sha256_hex(message: str) -> str:
+    """
+    Compute the SHA-256 digest of a UTF-8 message as a hex string.
+
+    Args:
+        message: Classical payload text string.
+
+    Returns:
+        64-character hex digest.
+    """
+    return hashlib.sha256(message.encode("utf-8")).hexdigest()
+
+
+def session_digest_bits(message: str, session: Optional[SessionContext] = None) -> List[int]:
+    """
+    Compute the 256 digest bits of a message with optional session freshness binding.
+
+    Args:
+        message: Classical payload text string.
+        session: Optional SessionContext bound into the hashed payload.
+
+    Returns:
+        List of 256 integers (each 0 or 1).
+    """
+    return sha256_bits(bind_session(message, session))
+
+
+def encode_message(
+    message: str,
+    key_bits: List[int],
+    session: Optional[SessionContext] = None,
+) -> List[EncodedQubit]:
     """
     Encode a classical message string into 256 Quantum Digital Signature records.
 
     Encoding Protocol:
-    1. Compute D = SHA-256(message) -> 256 digest bits d_i.
+    0. Bind the session context, if any: P = M | signer_id | nonce | counter | timestamp.
+    1. Compute D = SHA-256(P) -> 256 digest bits d_i.
     2. Compute b_i = d_i XOR K_i for each bit index i in 0..255.
     3. Select basis B_i using deterministic schedule:
        - i % 3 == 0 -> Basis 'Z'
@@ -50,6 +86,8 @@ def encode_message(message: str, key_bits: List[int]) -> List[EncodedQubit]:
     Args:
         message: UTF-8 input string.
         key_bits: List of 256 integers (0 or 1) representing secret shared key K.
+        session: Optional SessionContext providing replay resistance. When None, the
+                 digest is computed over the bare message (original protocol behaviour).
 
     Returns:
         List of 256 EncodedQubit objects.
@@ -60,7 +98,7 @@ def encode_message(message: str, key_bits: List[int]) -> List[EncodedQubit]:
         if bit not in (0, 1):
             raise ValueError("All key bits must be 0 or 1.")
 
-    digest = sha256_bits(message)
+    digest = session_digest_bits(message, session)
     encoded_qubits: List[EncodedQubit] = []
 
     for i in range(256):

@@ -4,13 +4,25 @@ Quantum Digital Signature Security Laboratory — Interactive Research UI.
 SCIENTIFIC INTEGRITY & DISCLOSURES:
 - All displayed numerical results are traceable to actual Qiskit Aer simulations.
 - IBM Quantum hardware validation is an OPTIONAL representative 3-qubit transmission layer.
-- Full 256-qubit security evaluation remains on AerSimulator for reproducibility and efficiency.
+- Full 256-position security evaluation remains on AerSimulator for reproducibility and
+  efficiency. "256 qubits" means 256 sequential 3-qubit teleportation circuits, not one
+  256-qubit circuit.
 - Baseline noise probability p0 is a calibrated experimental parameter, NOT a universal constant.
 - Threat detection uses exact Binomial upper-tail testing; it indicates statistical inconsistency
   with baseline noise, not proof of attacker identity.
-- Artificial intelligence (AI) and machine learning (ML) are explicitly NOT used.
+- Threat CLASSIFICATION uses deterministic distance scoring against analytically derived
+  per-basis error signatures. Artificial intelligence (AI) and machine learning (ML) are
+  explicitly NOT used anywhere in this system.
 - No emojis are used anywhere in this scientific interface.
 - This is a Qiskit Aer simulation laboratory, with optional IBM QPU validation.
+
+SECTIONS:
+  1. Overview               7. Threat Classification
+  2. Protocol (+ math)      8. Analysis
+  3. Key Distribution       9. Security Bounds
+  4. Quantum Lab           10. Performance
+  5. Hardware Validation   11. Audit Log
+  6. Security Lab          12. Reproducibility
 """
 
 import base64
@@ -18,6 +30,7 @@ import json
 import math
 import os
 import platform
+import secrets
 import sys
 from typing import List, Dict, Any, Optional
 
@@ -29,14 +42,28 @@ import matplotlib.patches as mpatches
 import numpy as np
 from scipy.stats import binom
 
-from qds.encoding import sha256_bits, encode_message
+from qds.encoding import sha256_bits, sha256_hex, encode_message, session_digest_bits
 from qds.circuit_visualization import (
     get_state_math_info,
     build_demonstration_teleportation_circuit,
     draw_circuit_mpl,
     draw_circuit_ascii,
 )
+from qds.session import (
+    NonceRegistry,
+    authorize_verifier,
+    create_session,
+    generate_master_secret,
+    issue_verifier_token,
+)
+from qds.keydist import (
+    ALL_QKD_BASES,
+    DEFAULT_QKD_BASES,
+    establish_signing_key,
+    run_key_distribution,
+)
 from core.backend import QuantumBackendAdapter
+from core.audit import AuditLogger
 from core.hardware import (
     get_ibm_token,
     get_ibm_instance,
@@ -47,14 +74,42 @@ from core.hardware import (
     fetch_ibm_job_result,
     BUILTIN_IBM_NOISE_MODELS,
 )
-from attacks.replay import compute_digest_hamming_distance
-from statistics.detector import detect_threat
+from attacks.replay import compute_digest_hamming_distance, run_replay_attack
+from attacks.unauthorized import (
+    ATTACKER_PROFILES,
+    run_authorization_profile_sweep,
+    run_unauthorized_verification_attack,
+)
+from qds_statistics.detector import (
+    detect_threat,
+    compute_decision_thresholds,
+    decide_signature,
+)
+from qds_statistics.classifier import (
+    THREAT_DISPLAY_NAMES,
+    classify_threat,
+    minimum_trials_for_resolution,
+)
+from qds_statistics.bounds import (
+    ATTACK_ERROR_RATES,
+    attack_detection_summary,
+    detection_power,
+    detection_power_curve,
+    forgery_bound_curve,
+    forgery_success_probability,
+)
 from evaluation.runner import (
     ExperimentResult,
     run_experiment,
     run_security_comparison,
     run_channel_tampering_sweep,
     run_basis_wise_channel_sweep,
+)
+from evaluation.performance import (
+    analyze_verification_complexity,
+    build_complexity_table,
+    measure_encoding_performance,
+    measure_verification_performance,
 )
 
 # ─── Page configuration ───────────────────────────────────────────────────────
@@ -64,249 +119,438 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── Load Background Image (Quantum Hardware & Circuit Art) ─────────────────
-bg_img_path = os.path.join(os.path.dirname(__file__), "assets", "quantum_bg.jpg")
-if not os.path.exists(bg_img_path):
-    bg_img_path = os.path.join(os.path.dirname(__file__), "assets", "quantum_bg.png")
+# ─── Sidebar header and appearance control ────────────────────────────────────
+# The appearance choice must resolve BEFORE the stylesheet is built, so these two
+# sidebar elements are created ahead of the CSS injection below.
+st.sidebar.markdown("## QUANTUM DIGITAL SIGNATURE\n### Security Laboratory")
 
-b64_bg = ""
-if os.path.exists(bg_img_path):
-    with open(bg_img_path, "rb") as img_file:
-        b64_bg = base64.b64encode(img_file.read()).decode()
+theme_mode = st.sidebar.radio(
+    "Appearance",
+    options=["Light", "Dark"],
+    index=0,
+    horizontal=True,
+    help=(
+        "Light is the default and is recommended for projection and printed figures. "
+        "Dark applies a muted navy palette to the interface and to every plot."
+    ),
+)
+IS_DARK = theme_mode == "Dark"
 
-bg_css_override = f"""
-    .stApp {{
-        background-image: linear-gradient(180deg, rgba(8, 4, 15, 0.82) 0%, rgba(13, 5, 26, 0.88) 100%),
-                          url("data:image/jpeg;base64,{b64_bg}") !important;
-        background-position: center center !important;
-        background-size: cover !important;
-        background-repeat: no-repeat !important;
-        background-attachment: fixed !important;
-        color: #F3E8FF !important;
-        font-family: 'Inter', sans-serif !important;
+# ─── Design tokens ────────────────────────────────────────────────────────────
+# One source of truth for the interface, the embedded HTML component, and the
+# Matplotlib figures, so every surface stays in step across both modes.
+LIGHT_THEME = {
+    "bg_primary": "#FFFFFF",
+    "bg_secondary": "#F1F3F5",
+    "bg_elevated": "#F8F9FA",
+    "bg_code": "#F8F9FA",
+    "border": "#DEE2E6",
+    "border_strong": "#CED4DA",
+    "text_primary": "#212529",
+    # Semantic colours are a shade darker than the usual Tailwind-600 values so
+    # that body-size text clears WCAG AA (4.5:1) on BOTH the white and the grey
+    # surface. The lighter variants measured 2.9-3.8:1, which is large-text only.
+    "text_secondary": "#5F666D",
+    "accent": "#4361EE",
+    "accent_bg": "rgba(67, 97, 238, 0.08)",
+    "success": "#047857",
+    "success_bg": "rgba(4, 120, 87, 0.09)",
+    "danger": "#C5221F",
+    "danger_bg": "rgba(197, 34, 31, 0.08)",
+    "warning": "#B45309",
+    "warning_bg": "rgba(180, 83, 9, 0.10)",
+    "series": ["#4361EE", "#B45309", "#047857", "#6D28D9", "#0E7490", "#9F1239"],
+    "grid": "#ADB5BD",
+    "bitmap_cmap": "binary",
+}
+
+DARK_THEME = {
+    "bg_primary": "#0F172A",
+    "bg_secondary": "#1E293B",
+    "bg_elevated": "#16213E",
+    "bg_code": "#16213E",
+    "border": "#334155",
+    "border_strong": "#475569",
+    "text_primary": "#E2E8F0",
+    "text_secondary": "#94A3B8",
+    "accent": "#60A5FA",
+    "accent_bg": "rgba(96, 165, 250, 0.14)",
+    "success": "#34D399",
+    "success_bg": "rgba(52, 211, 153, 0.14)",
+    "danger": "#F87171",
+    "danger_bg": "rgba(248, 113, 113, 0.14)",
+    "warning": "#FBBF24",
+    "warning_bg": "rgba(251, 191, 36, 0.14)",
+    "series": ["#60A5FA", "#FBBF24", "#34D399", "#A78BFA", "#22D3EE", "#FB7185"],
+    "grid": "#475569",
+    "bitmap_cmap": "gray",
+}
+
+T = DARK_THEME if IS_DARK else LIGHT_THEME
+
+
+def _apply_plot_theme(fig, *axes, legend: bool = False):
+    """
+    Apply the active theme to a Matplotlib figure and its axes.
+
+    Keeps every figure legible in both modes and removes the hardcoded dark
+    styling the plots previously carried. Purely presentational: no data,
+    limits, or labels are altered.
+
+    Args:
+        fig: Figure to restyle.
+        *axes: Axes to restyle. The figure's own axes are used when omitted.
+        legend: Restyle an existing legend to match the theme.
+    """
+    fig.patch.set_facecolor(T["bg_primary"])
+    for ax in (axes or fig.get_axes()):
+        ax.set_facecolor(T["bg_primary"])
+        ax.tick_params(colors=T["text_secondary"], labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_color(T["border"])
+        ax.xaxis.label.set_color(T["text_primary"])
+        ax.yaxis.label.set_color(T["text_primary"])
+        ax.title.set_color(T["text_primary"])
+        if legend and ax.get_legend() is not None:
+            frame = ax.get_legend().get_frame()
+            frame.set_facecolor(T["bg_elevated"])
+            frame.set_edgecolor(T["border"])
+            for text in ax.get_legend().get_texts():
+                text.set_color(T["text_primary"])
+    return fig
+
+# ─── CSS: clean academic design system ────────────────────────────────────────
+# Navigation groups. The index is the 1-based position of the first navigation
+# option in that group; headings are rendered as non-interactive ::before /
+# ::after content sitting in the label's top margin, so the radio widget itself
+# keeps exactly the option list the routing depends on.
+NAV_GROUPS = [
+    (1, "GETTING STARTED", "Concepts and protocol walkthrough"),
+    (3, "KEY MANAGEMENT", "Establish the shared secret key"),
+    (4, "EXPERIMENTS", "Run circuits on simulators and hardware"),
+    (6, "SECURITY TESTING", "Attack the protocol, identify the threat"),
+    (8, "ANALYSIS & RESULTS", "Statistics, bounds and scaling"),
+    (11, "AUDIT & COMPLIANCE", "Event trail and reproducibility"),
+]
+
+_nav_group_rules = "".join(
+    f"""
+    .st-key-qds_nav div[role="radiogroup"] > label:nth-of-type({idx}) {{
+        margin-top: 36px !important;
     }}
-    [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stMainBlockContainer"], .main {{
-        background: transparent !important;
+    .st-key-qds_nav div[role="radiogroup"] > label:nth-of-type({idx})::before {{
+        content: "{name}";
+        top: -31px;
+    }}
+    .st-key-qds_nav div[role="radiogroup"] > label:nth-of-type({idx})::after {{
+        content: "{desc}";
+        top: -16px;
+    }}
+    """
+    for idx, name, desc in NAV_GROUPS
+)
+
+# Surface overrides needed only in dark mode, because config.toml ships the
+# light palette as the Streamlit-native default.
+_dark_overrides = f"""
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"],
+    [data-testid="stMainBlockContainer"], .main {{
+        background-color: {T["bg_primary"]} !important;
+        color: {T["text_primary"]} !important;
     }}
     [data-testid="stHeader"] {{
-        background: transparent !important;
+        background-color: {T["bg_primary"]} !important;
     }}
-""" if b64_bg else """
-    .stApp {
-        background: radial-gradient(circle at 10% 10%, rgba(236, 72, 153, 0.12) 0%, transparent 45%),
-                    radial-gradient(circle at 90% 90%, rgba(168, 85, 247, 0.15) 0%, transparent 45%),
-                    #08040F !important;
-        color: #F3E8FF !important;
-        font-family: 'Inter', sans-serif !important;
-    }
-"""
+    [data-testid="stSidebarContent"] {{
+        background-color: {T["bg_secondary"]} !important;
+    }}
+    [data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] li, [data-testid="stText"],
+    .stCaption, [data-testid="stCaptionContainer"] {{
+        color: {T["text_primary"]} !important;
+    }}
+    [data-testid="stDataFrame"], [data-testid="stTable"], .stDataFrame {{
+        background-color: {T["bg_elevated"]} !important;
+        color: {T["text_primary"]} !important;
+    }}
+    [data-testid="stExpander"] details {{
+        background-color: {T["bg_elevated"]} !important;
+        border: 1px solid {T["border"]} !important;
+    }}
+    [data-baseweb="select"] > div, [data-baseweb="input"] > div,
+    [data-baseweb="textarea"] > div {{
+        background-color: {T["bg_elevated"]} !important;
+        border-color: {T["border"]} !important;
+        color: {T["text_primary"]} !important;
+    }}
+    [data-baseweb="popover"] li, [data-baseweb="menu"] li {{
+        background-color: {T["bg_elevated"]} !important;
+        color: {T["text_primary"]} !important;
+    }}
+    code, pre, [data-testid="stCode"] {{
+        background-color: {T["bg_code"]} !important;
+        color: {T["text_primary"]} !important;
+    }}
+""" if IS_DARK else ""
 
-# ─── CSS: Purplish-Pinkish Cyber-Quantum Design System ────────────────────────
-css_style_content = """
+css_style_content = f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
 
-    section[data-testid="stSidebar"] {
-        background-color: rgba(17, 7, 34, 0.94) !important;
-        backdrop-filter: blur(12px) !important;
-        -webkit-backdrop-filter: blur(12px) !important;
-        border-right: 1px solid rgba(236, 72, 153, 0.25) !important;
-    }
-    section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {
-        color: #F472B6 !important;
-        font-family: 'Outfit', sans-serif !important;
-    }
+    :root {{
+        --bg-primary: {T["bg_primary"]};
+        --bg-secondary: {T["bg_secondary"]};
+        --bg-elevated: {T["bg_elevated"]};
+        --border: {T["border"]};
+        --border-strong: {T["border_strong"]};
+        --text-primary: {T["text_primary"]};
+        --text-secondary: {T["text_secondary"]};
+        --accent-primary: {T["accent"]};
+        --accent-primary-bg: {T["accent_bg"]};
+        --color-success: {T["success"]};
+        --color-success-bg: {T["success_bg"]};
+        --color-danger: {T["danger"]};
+        --color-danger-bg: {T["danger_bg"]};
+        --color-warning: {T["warning"]};
+        --color-warning-bg: {T["warning_bg"]};
+    }}
 
-    h1 {
-        font-family: 'Outfit', sans-serif !important;
-        font-size: 2.1rem !important;
-        font-weight: 800 !important;
-        background: linear-gradient(135deg, #FF60B5 0%, #EC4899 40%, #C084FC 80%, #818CF8 100%);
-        -webkit-background-clip: text !important;
-        -webkit-text-fill-color: transparent !important;
-        border-bottom: 2px solid transparent !important;
-        border-image: linear-gradient(90deg, #EC4899, #A855F7, transparent) 1 !important;
-        padding-bottom: 8px !important;
-        margin-bottom: 12px !important;
-        letter-spacing: -0.02em !important;
-        text-shadow: 0 0 25px rgba(236, 72, 153, 0.25);
-    }
+    html, body, .stApp {{
+        font-family: 'Inter', sans-serif;
+    }}
 
-    h2 {
-        font-family: 'Outfit', sans-serif !important;
-        font-size: 1.45rem !important;
+    {_dark_overrides}
+
+    section[data-testid="stSidebar"] {{
+        background-color: var(--bg-secondary) !important;
+        border-right: 1px solid var(--border) !important;
+    }}
+    section[data-testid="stSidebar"] h2 {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 1.0rem !important;
         font-weight: 700 !important;
-        color: #E9D5FF !important;
-        border-bottom: 1px solid rgba(236, 72, 153, 0.25) !important;
+        color: var(--text-primary) !important;
+        letter-spacing: 0.01em !important;
+        border-bottom: none !important;
+        margin-bottom: 0 !important;
+        padding-bottom: 0 !important;
+    }}
+    section[data-testid="stSidebar"] h3 {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.80rem !important;
+        font-weight: 600 !important;
+        color: var(--text-secondary) !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.07em !important;
+        margin-top: 1.1em !important;
+    }}
+
+    h1 {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 1.85rem !important;
+        font-weight: 700 !important;
+        color: var(--text-primary) !important;
+        letter-spacing: -0.01em !important;
+        padding-bottom: 10px !important;
+        margin-bottom: 14px !important;
+        border-bottom: 1px solid var(--border) !important;
+    }}
+    h2 {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 1.32rem !important;
+        font-weight: 600 !important;
+        color: var(--text-primary) !important;
+        border-bottom: 1px solid var(--border) !important;
         padding-bottom: 6px !important;
         margin-top: 1.6em !important;
-    }
-
-    h3 {
-        font-family: 'Outfit', sans-serif !important;
-        font-size: 1.15rem !important;
+    }}
+    h3 {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 1.08rem !important;
         font-weight: 600 !important;
-        color: #C084FC !important;
+        color: var(--text-primary) !important;
         margin-top: 1.2em !important;
-    }
+    }}
 
-    .status-normal {
-        border-left: 4px solid #10B981;
-        background: linear-gradient(90deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.03));
-        padding: 12px 18px;
-        border-radius: 0 8px 8px 0;
+    .status-normal {{
+        border-left: 3px solid var(--color-success);
+        background: var(--color-success-bg);
+        padding: 12px 16px;
+        border-radius: 0 6px 6px 0;
         font-family: 'JetBrains Mono', monospace;
-        font-size: 0.90rem;
-        font-weight: 600;
-        color: #34D399;
-        margin: 10px 0;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
-    }
-
-    .status-threat {
-        border-left: 4px solid #FF2A85;
-        background: linear-gradient(90deg, rgba(255, 42, 133, 0.20), rgba(255, 42, 133, 0.04));
-        padding: 12px 18px;
-        border-radius: 0 8px 8px 0;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.90rem;
-        font-weight: 600;
-        color: #FF60B5;
-        margin: 10px 0;
-        box-shadow: 0 4px 15px rgba(255, 42, 133, 0.15);
-    }
-
-    .info-box {
-        border-left: 4px solid #A855F7;
-        background: linear-gradient(90deg, rgba(168, 85, 247, 0.15), rgba(168, 85, 247, 0.03));
-        padding: 12px 18px;
-        border-radius: 0 8px 8px 0;
         font-size: 0.88rem;
-        color: #E9D5FF;
-        margin: 10px 0;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
-    }
+        font-weight: 500;
+        color: var(--color-success);
+        margin: 8px 0;
+    }}
 
-    .math-block {
-        background-color: #120722;
-        border: 1px solid rgba(236, 72, 153, 0.3);
-        border-radius: 8px;
+    .status-threat {{
+        border-left: 3px solid var(--color-danger);
+        background: var(--color-danger-bg);
+        padding: 12px 16px;
+        border-radius: 0 6px 6px 0;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.88rem;
+        font-weight: 500;
+        color: var(--color-danger);
+        margin: 8px 0;
+    }}
+
+    .info-box {{
+        border-left: 3px solid var(--accent-primary);
+        background: var(--accent-primary-bg);
+        padding: 12px 16px;
+        border-radius: 0 6px 6px 0;
+        font-size: 0.88rem;
+        color: var(--text-primary);
+        margin: 8px 0;
+    }}
+
+    .math-block {{
+        background-color: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: 6px;
         padding: 14px 18px;
         margin: 12px 0;
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.88rem;
-        color: #F472B6;
-        box-shadow: inset 0 0 15px rgba(236, 72, 153, 0.08);
-    }
+        color: var(--text-primary);
+    }}
 
-    .dataframe-container {
-        border: 1px solid rgba(236, 72, 153, 0.25);
-        border-radius: 8px;
+    .dataframe-container {{
+        border: 1px solid var(--border);
+        border-radius: 6px;
         overflow: hidden;
         margin: 12px 0;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
-    }
+    }}
 
-    pre, code {
+    .security-gap-banner {{
+        border-left: 3px solid var(--color-warning);
+        background: var(--color-warning-bg);
+        padding: 12px 16px;
+        border-radius: 0 6px 6px 0;
+        font-size: 0.88rem;
+        color: var(--text-primary);
+        margin: 10px 0;
+    }}
+
+    pre, code {{
         font-family: 'JetBrains Mono', monospace !important;
-    }
+    }}
 
-    .metric-label {
-        font-size: 0.78rem;
-        color: #C084FC;
-        font-family: 'Outfit', sans-serif;
+    .metric-label {{
+        font-size: 0.76rem;
+        color: var(--text-secondary);
+        font-family: 'Inter', sans-serif;
         text-transform: uppercase;
         letter-spacing: 0.06em;
-    }
+    }}
 
-    .metric-value {
-        font-size: 1.15rem;
+    .metric-value {{
+        font-size: 1.12rem;
         font-family: 'JetBrains Mono', monospace;
         font-weight: 600;
-        color: #FF70A6;
-        text-shadow: 0 0 10px rgba(255, 112, 166, 0.3);
-    }
+        color: var(--text-primary);
+    }}
 
-    .sec-header {
-        font-family: 'Outfit', sans-serif;
-        font-size: 1.10rem;
-        font-weight: 700;
-        color: #FF60B5;
-        background: linear-gradient(90deg, rgba(236, 72, 153, 0.22), rgba(168, 85, 247, 0.08));
-        padding: 8px 16px;
-        border-left: 4px solid #EC4899;
-        border-radius: 0 6px 6px 0;
-        margin-top: 1.4em;
-        margin-bottom: 0.8em;
-        letter-spacing: 0.03em;
-    }
+    .sec-header {{
+        font-family: 'Inter', sans-serif;
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        background: var(--bg-secondary);
+        padding: 10px 16px;
+        border-left: 3px solid var(--accent-primary);
+        border-radius: 0 4px 4px 0;
+        margin-top: 1.2em;
+        margin-bottom: 0.6em;
+    }}
 
-    [data-testid="stMetric"] {
-        background: rgba(22, 10, 42, 0.75) !important;
-        border: 1px solid rgba(236, 72, 153, 0.25) !important;
-        border-radius: 10px !important;
+    [data-testid="stMetric"] {{
+        background: var(--bg-elevated) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 6px !important;
         padding: 12px 16px !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), inset 0 0 15px rgba(236, 72, 153, 0.05) !important;
-    }
-    [data-testid="stMetricLabel"] {
-        font-family: 'Outfit', sans-serif !important;
-        font-size: 0.82rem !important;
-        color: #C084FC !important;
+    }}
+    [data-testid="stMetricLabel"] {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.78rem !important;
+        color: var(--text-secondary) !important;
         text-transform: uppercase !important;
         letter-spacing: 0.05em !important;
-    }
-    [data-testid="stMetricValue"] {
+    }}
+    [data-testid="stMetricValue"] {{
         font-family: 'JetBrains Mono', monospace !important;
-        font-size: 1.25rem !important;
-        font-weight: 700 !important;
-        color: #FF70A6 !important;
-        text-shadow: 0 0 10px rgba(255, 112, 166, 0.3) !important;
-    }
+        font-size: 1.20rem !important;
+        font-weight: 600 !important;
+        color: var(--text-primary) !important;
+    }}
 
-    .stButton > button {
-        background: linear-gradient(135deg, #EC4899 0%, #A855F7 100%) !important;
+    .stButton > button {{
+        background: var(--accent-primary) !important;
         color: #FFFFFF !important;
-        font-family: 'Outfit', sans-serif !important;
-        font-weight: 700 !important;
-        border: none !important;
-        border-radius: 8px !important;
-        padding: 10px 24px !important;
-        box-shadow: 0 0 20px rgba(236, 72, 153, 0.4) !important;
-        transition: all 0.25s ease-in-out !important;
-    }
-    .stButton > button:hover {
-        transform: translateY(-2px) scale(1.02) !important;
-        box-shadow: 0 0 30px rgba(236, 72, 153, 0.65) !important;
-    }
+        font-family: 'Inter', sans-serif !important;
+        font-weight: 600 !important;
+        border: 1px solid var(--accent-primary) !important;
+        border-radius: 6px !important;
+        padding: 9px 22px !important;
+    }}
+    .stButton > button:hover {{
+        filter: brightness(0.93) !important;
+    }}
+    .stButton > button:focus-visible {{
+        outline: 2px solid var(--accent-primary) !important;
+        outline-offset: 2px !important;
+    }}
 
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label {
-        background: rgba(26, 12, 46, 0.4) !important;
-        border: 1px solid rgba(236, 72, 153, 0.15) !important;
-        border-radius: 8px !important;
-        padding: 8px 14px !important;
-        margin-bottom: 6px !important;
-        transition: all 0.2s ease-in-out !important;
-        font-family: 'Outfit', sans-serif !important;
+    /* Navigation: flat rows with non-interactive group headings. */
+    div[data-testid="stSidebar"] div[role="radiogroup"] {{
+        gap: 0 !important;
+    }}
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label {{
+        position: relative !important;
+        background: transparent !important;
+        border: 1px solid transparent !important;
+        border-radius: 5px !important;
+        padding: 7px 12px !important;
+        margin-bottom: 2px !important;
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.92rem !important;
         font-weight: 500 !important;
-        letter-spacing: 0.02em !important;
-    }
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
-        background: rgba(236, 72, 153, 0.15) !important;
-        border-color: rgba(236, 72, 153, 0.4) !important;
-        box-shadow: 0 0 12px rgba(236, 72, 153, 0.2) !important;
-    }
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {
-        background: linear-gradient(90deg, rgba(236, 72, 153, 0.25), rgba(168, 85, 247, 0.2)) !important;
-        border-color: #EC4899 !important;
-        box-shadow: 0 0 15px rgba(236, 72, 153, 0.3) !important;
-    }
+        color: var(--text-primary) !important;
+    }}
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {{
+        background: var(--accent-primary-bg) !important;
+    }}
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {{
+        background: var(--accent-primary-bg) !important;
+        border-color: var(--accent-primary) !important;
+        font-weight: 600 !important;
+    }}
+    .st-key-qds_nav div[role="radiogroup"] > label::before,
+    .st-key-qds_nav div[role="radiogroup"] > label::after {{
+        position: absolute;
+        left: 0;
+        pointer-events: none;
+        white-space: nowrap;
+    }}
+    .st-key-qds_nav div[role="radiogroup"] > label::before {{
+        font-size: 0.66rem;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        color: var(--text-primary);
+    }}
+    .st-key-qds_nav div[role="radiogroup"] > label::after {{
+        font-size: 0.66rem;
+        font-style: italic;
+        color: var(--text-secondary);
+    }}
+    {_nav_group_rules}
     </style>
 """
 
-st.markdown(css_style_content + f"<style>{bg_css_override}</style>", unsafe_allow_html=True)
+st.markdown(css_style_content, unsafe_allow_html=True)
 
-# ─── Sidebar: Navigation + Global Configuration ───────────────────────────────
-st.sidebar.markdown("## QUANTUM DIGITAL SIGNATURE\n### Security Laboratory")
 st.sidebar.markdown("---")
 
 nav_section = st.sidebar.radio(
@@ -314,13 +558,19 @@ nav_section = st.sidebar.radio(
     options=[
         "Overview",
         "Protocol",
+        "Key Distribution",
         "Quantum Lab",
         "Hardware Validation",
         "Security Lab",
+        "Threat Classification",
         "Analysis",
+        "Security Bounds",
+        "Performance",
+        "Audit Log",
         "Reproducibility",
     ],
     label_visibility="collapsed",
+    key="qds_nav",
 )
 
 st.sidebar.markdown("---")
@@ -386,19 +636,55 @@ message = st.sidebar.text_input("Message Payload (M)", value="ABC")
 
 key_mode = st.sidebar.selectbox(
     "Secret Key K",
-    options=["Deterministic Balanced (0,1,0,1...)", "Random 256-bit Key"],
+    options=[
+        "Cryptographic Random (CSPRNG)",
+        "Quantum Key Distribution (BBM92)",
+        "Deterministic Balanced (0,1,0,1...)",
+    ],
+    help=(
+        "CSPRNG uses secrets.randbits, suitable for real use. BBM92 establishes K from "
+        "measured Bell pairs. The deterministic pattern is for teaching only: it is "
+        "publicly guessable and voids the information-theoretic forgery bound."
+    ),
 )
 
-if key_mode == "Deterministic Balanced (0,1,0,1...)":
-    st.session_state.shared_key = [i % 2 for i in range(256)]
-elif key_mode == "Random 256-bit Key":
-    if st.sidebar.button("Generate New Random Key"):
-        st.session_state.shared_key = list(np.random.randint(0, 2, size=256))
-
+# A cryptographically secure key is the safe default. The alternating 0,1,0,1 pattern is
+# retained only for reproducible demonstrations; it is publicly guessable, so an attacker
+# who assumes it needs no forgery at all.
 if "shared_key" not in st.session_state:
-    st.session_state.shared_key = [i % 2 for i in range(256)]
+    st.session_state.shared_key = [secrets.randbits(1) for _ in range(256)]
+    st.session_state.key_provenance = "Cryptographic Random (CSPRNG)"
+
+if key_mode == "Deterministic Balanced (0,1,0,1...)":
+    st.sidebar.warning(
+        "INSECURE KEY: this pattern is public knowledge. Forgery bounds reported "
+        "elsewhere in this app assume a uniformly random key and do not hold here."
+    )
+    if st.session_state.get("key_provenance") != "Deterministic Balanced (0,1,0,1...)":
+        st.session_state.shared_key = [i % 2 for i in range(256)]
+        st.session_state.key_provenance = "Deterministic Balanced (0,1,0,1...)"
+
+elif key_mode == "Cryptographic Random (CSPRNG)":
+    if st.sidebar.button("Generate New CSPRNG Key") or \
+            st.session_state.get("key_provenance") == "Deterministic Balanced (0,1,0,1...)":
+        st.session_state.shared_key = [secrets.randbits(1) for _ in range(256)]
+        st.session_state.key_provenance = "Cryptographic Random (CSPRNG)"
+
+elif key_mode == "Quantum Key Distribution (BBM92)":
+    if st.sidebar.button("Establish Key via BBM92"):
+        with st.spinner("Distributing Bell pairs and sifting..."):
+            qkd_key, qkd_result = establish_signing_key(key_length=256)
+        st.session_state.shared_key = qkd_key
+        st.session_state.key_provenance = "Quantum Key Distribution (BBM92)"
+        st.session_state.qkd_result = qkd_result
+    if st.session_state.get("key_provenance") != "Quantum Key Distribution (BBM92)":
+        st.sidebar.info("Press the button to establish K from measured Bell pairs.")
 
 shared_key: List[int] = st.session_state.shared_key
+key_provenance: str = st.session_state.get("key_provenance", key_mode)
+st.sidebar.caption(
+    f"Active key: {key_provenance} | 1-bit density {sum(shared_key) / len(shared_key):.3f}"
+)
 
 baseline_noise = st.sidebar.slider(
     "Baseline Error Rate (p0)",
@@ -426,6 +712,43 @@ shots_per_qubit = st.sidebar.selectbox(
 seed_input = st.sidebar.number_input("Random Seed", value=42, step=1)
 seed = int(seed_input)
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("### PROTOCOL HARDENING")
+
+freshness_enabled = st.sidebar.checkbox(
+    "Session Nonce Binding (replay resistance)",
+    value=True,
+    help=(
+        "Binds a random nonce, counter, signer identity, and timestamp into the hashed "
+        "payload. Without this, a same-message replay is indistinguishable from a fresh "
+        "signature by any measurement."
+    ),
+)
+
+audit_enabled = st.sidebar.checkbox(
+    "Security Event Logging",
+    value=True,
+    help="Append verification and threat events to an exportable JSON Lines audit log.",
+)
+
+# Process-wide singletons held in session state so they survive Streamlit reruns.
+if "audit_logger" not in st.session_state:
+    st.session_state.audit_logger = AuditLogger()
+if "nonce_registry" not in st.session_state:
+    st.session_state.nonce_registry = NonceRegistry()
+if "master_secret" not in st.session_state:
+    st.session_state.master_secret = generate_master_secret()
+
+st.session_state.audit_logger.enabled = audit_enabled
+audit_logger: AuditLogger = st.session_state.audit_logger
+nonce_registry: NonceRegistry = st.session_state.nonce_registry
+master_secret: bytes = st.session_state.master_secret
+
+active_session = create_session(signer_id="alice", counter=1) if freshness_enabled else None
+decision_thresholds = compute_decision_thresholds(
+    total_trials=256, baseline_error_rate=baseline_noise
+)
+
 # ─── Helper: run single experiment and cache ──────────────────────────────────
 
 def _run_and_cache(attack_name: str, attack_params: Dict[str, Any]) -> ExperimentResult:
@@ -439,8 +762,81 @@ def _run_and_cache(attack_name: str, attack_params: Dict[str, Any]) -> Experimen
         seed=seed,
         backend=active_backend_adapter,
         attack_params=attack_params,
+        audit_logger=audit_logger,
     )
     return res
+
+
+def _render_decision_banner(decision) -> None:
+    """Render the three-way ACCEPT / ABORT / REJECT verdict with its justification."""
+    if decision is None:
+        return
+    if decision.verdict == "ACCEPT":
+        st.success(f"VERDICT: ACCEPT — {decision.justification}")
+    elif decision.verdict == "ABORT":
+        st.warning(f"VERDICT: ABORT — {decision.justification}")
+    else:
+        st.error(f"VERDICT: REJECT — {decision.justification}")
+
+
+def _render_classification_block(classification, key_prefix: str = "") -> None:
+    """Render a threat classification: verdict, basis fingerprint, ranked hypotheses."""
+    if classification is None:
+        st.info(
+            "No per-position measurement records were produced for this run, so the "
+            "basis-resolved classifier has nothing to profile."
+        )
+        return
+
+    profile = classification.profile
+
+    st.markdown(f"#### Classified Threat: {classification.top_display_name}")
+    st.progress(
+        min(1.0, max(0.0, classification.confidence)),
+        text=f"Discriminability confidence: {classification.confidence:.2f}",
+    )
+    st.caption(classification.interpretation)
+
+    col_a, col_b, col_c, col_d = st.columns(4)
+    col_a.metric("e_Z (Z basis)", f"{profile.rates['Z']:.4f}")
+    col_b.metric("e_X (X basis)", f"{profile.rates['X']:.4f}")
+    col_c.metric("e_Y (Y basis)", f"{profile.rates['Y']:.4f}")
+    col_d.metric("Pooled error", f"{profile.overall_rate:.4f}")
+
+    if profile.key_error_correlation is not None:
+        st.metric(
+            "Error-to-key correlation (MCC)",
+            f"{profile.key_error_correlation:+.4f}",
+            help=(
+                "Matthews correlation between the per-position error indicator and the "
+                "secret key bit K_i. Approaches +1 for a digest-only forgery, where "
+                "errors land exactly where K_i = 1, and 0 for random-guess impersonation."
+            ),
+        )
+
+    st.markdown("**Ranked hypotheses** (lower distance = better fit)")
+    st.dataframe(
+        [
+            {
+                "Threat Class": h.display_name,
+                "Distance": f"{h.distance:.4f}",
+                "Score": f"{h.score:.4f}",
+                "Discriminator Penalty": f"{h.penalty:.2f}",
+                "Expected (Z, X, Y)": (
+                    f"({h.expected_signature['Z']:.3f}, "
+                    f"{h.expected_signature['X']:.3f}, "
+                    f"{h.expected_signature['Y']:.3f})"
+                ),
+            }
+            for h in classification.hypotheses
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    with st.expander("Evidence for the leading hypothesis"):
+        for item in classification.hypotheses[0].evidence:
+            st.markdown(f"- {item}")
 
 
 def _plot_pmf(n: int, p0: float, k_obs: int, alpha_val: float) -> plt.Figure:
@@ -456,27 +852,24 @@ def _plot_pmf(n: int, p0: float, k_obs: int, alpha_val: float) -> plt.Figure:
             break
 
     fig, ax = plt.subplots(figsize=(7, 3))
-    fig.patch.set_facecolor('#130825')
-    ax.set_facecolor('#0B0414')
-    ax.plot(x_vals, pmf_vals, color="#C084FC", linewidth=1.8, marker="o", markersize=4,
+    ax.plot(x_vals, pmf_vals, color=T["accent"], linewidth=1.8, marker="o", markersize=4,
             label=f"Binomial PMF (n={n}, p0={p0})")
-    ax.fill_between(x_vals, pmf_vals, alpha=0.25, color="#A855F7")
+    ax.fill_between(x_vals, pmf_vals, alpha=0.18, color=T["accent"])
 
     if k_crit is not None and k_crit <= x_max:
         reject_x = x_vals[x_vals >= k_crit]
         ax.fill_between(reject_x, binom.pmf(reject_x, n, p0),
-                        alpha=0.45, color="#FF2A85", label=f"Rejection Region (alpha={alpha_val})")
+                        alpha=0.35, color=T["danger"], label=f"Rejection Region (alpha={alpha_val})")
 
-    ax.axvline(k_obs, color="#FF2A85", linestyle="--", linewidth=1.8,
+    ax.axvline(k_obs, color=T["danger"], linestyle="--", linewidth=1.8,
                label=f"Observed k = {k_obs}")
-    ax.set_xlabel("Number of Verification Errors (k)", color="#E9D5FF")
-    ax.set_ylabel("Probability Mass P(K = k | n, p0)", color="#E9D5FF")
-    ax.set_title("Exact Binomial Error Distribution under Null Hypothesis H0: p = p0", color="#FF70A6", fontsize=10, fontweight="bold")
-    ax.grid(True, linestyle="--", alpha=0.2, color="#A855F7")
-    ax.tick_params(colors="#C084FC")
-    for spine in ax.spines.values():
-        spine.set_color((236/255, 72/255, 153/255, 0.3))
-    ax.legend(fontsize=8, facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF")
+    ax.set_xlabel("Number of Verification Errors (k)")
+    ax.set_ylabel("Probability Mass P(K = k | n, p0)")
+    ax.set_title("Exact Binomial Error Distribution under Null Hypothesis H0: p = p0",
+                 fontsize=10, fontweight="bold")
+    ax.grid(True, linestyle="--", alpha=0.3, color=T["grid"])
+    ax.legend(fontsize=8)
+    _apply_plot_theme(fig, ax, legend=True)
     fig.tight_layout()
     return fig
 
@@ -535,7 +928,7 @@ def _render_measurement_and_stochasticity_block(
     res: ExperimentResult,
     theo_exp_str: str,
 ):
-    st.markdown('<div class="sec-header">G. MEASUREMENT RESULTS</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">F. MEASUREMENT RESULTS</div>', unsafe_allow_html=True)
 
     theo_val = res.theoretical_expectation if isinstance(res.theoretical_expectation, float) else None
     obs_val = res.observed_error_rate
@@ -558,7 +951,7 @@ def _render_measurement_and_stochasticity_block(
 
 
 def _render_position_trace_table_and_map(detailed_results: List[Dict[str, Any]], attack_type: str):
-    st.markdown('<div class="sec-header">E. POSITION-BY-POSITION EXPERIMENTAL TRACE</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">H. POSITION-BY-POSITION EXPERIMENTAL TRACE</div>', unsafe_allow_html=True)
 
     if not detailed_results:
         st.write("No detailed per-qubit results recorded.")
@@ -581,13 +974,12 @@ def _render_position_trace_table_and_map(detailed_results: List[Dict[str, Any]],
     if len(grid_outcomes) == 256:
         grid_2d = grid_outcomes.reshape(16, 16)
         fig_map, ax_map = plt.subplots(figsize=(4, 4))
-        fig_map.patch.set_facecolor('#130825')
-        ax_map.set_facecolor('#0B0414')
-        cmap = matplotlib.colors.ListedColormap(["#FF2A85", "#10B981"])
+        cmap = matplotlib.colors.ListedColormap([T["danger"], T["success"]])
         ax_map.imshow(grid_2d, cmap=cmap, vmin=0, vmax=1, interpolation="nearest", aspect="equal")
-        ax_map.set_title("256-Qubit Outcome Map (Green=MATCH, Red=MISMATCH)", fontsize=8, color="#F3E8FF")
+        ax_map.set_title("256-Position Outcome Map (Green=MATCH, Red=MISMATCH)", fontsize=8)
         ax_map.set_xticks([])
         ax_map.set_yticks([])
+        _apply_plot_theme(fig_map, ax_map)
         st.pyplot(fig_map)
         plt.close(fig_map)
 
@@ -645,7 +1037,7 @@ def _render_position_trace_table_and_map(detailed_results: List[Dict[str, Any]],
 
         rows.append(row_dict)
 
-    st.dataframe(rows, use_container_width=True)
+    st.dataframe(rows, width="stretch")
 
     with st.expander("Raw Experimental Trace Data (JSON Inspector)"):
         num_inspect = st.selectbox("Inspect raw records", [20, 50, 100, 256], index=0)
@@ -673,13 +1065,13 @@ if nav_section == "Overview":
         """
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 20px 0;">
           <!-- Stage 1 -->
-          <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(236, 72, 153, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
+          <div style="background: var(--bg-elevated); border: 1px solid rgba(236, 72, 153, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-              <span style="background: linear-gradient(135deg, #EC4899, #A855F7); color: #FFF; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">STAGE 1</span>
-              <span style="color: #C084FC; font-size: 0.80rem; font-weight: 600; font-family: 'JetBrains Mono', monospace;">CLASSICAL DOMAIN</span>
+              <span style="background: var(--accent-primary); color: #FFF; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">STAGE 1</span>
+              <span style="color: var(--text-secondary); font-size: 0.80rem; font-weight: 600; font-family: 'JetBrains Mono', monospace;">CLASSICAL DOMAIN</span>
             </div>
-            <h4 style="color: #F472B6; font-family: 'Outfit', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Classical Preprocessing</h4>
-            <div style="font-size: 0.86rem; color: #E9D5FF; line-height: 1.6;">
+            <h4 style="color: var(--accent-primary); font-family: 'Inter', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Classical Preprocessing</h4>
+            <div style="font-size: 0.86rem; color: var(--text-primary); line-height: 1.6;">
               <p style="margin: 6px 0;"><strong>Step 1: Hash Generation</strong><br>Message <code>M</code> &rarr; <code>D = SHA-256(M)</code> (256 bits)</p>
               <p style="margin: 6px 0;"><strong>Step 2: XOR Key Encoding</strong><br><code>b<sub>i</sub> = d<sub>i</sub> &oplus; K<sub>i</sub></code> for <code>i &in; 0..255</code></p>
               <p style="margin: 6px 0;"><strong>Step 3: Basis Schedule</strong><br><code>i mod 3 = 0 &rarr; Z</code> | <code>1 &rarr; X</code> | <code>2 &rarr; Y</code></p>
@@ -687,27 +1079,27 @@ if nav_section == "Overview":
           </div>
 
           <!-- Stage 2 -->
-          <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
+          <div style="background: var(--bg-elevated); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-              <span style="background: linear-gradient(135deg, #A855F7, #6366F1); color: #FFF; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">STAGE 2</span>
-              <span style="color: #A855F7; font-size: 0.80rem; font-weight: 600; font-family: 'JetBrains Mono', monospace;">QUANTUM CHANNEL</span>
+              <span style="background: var(--accent-primary); color: #FFF; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">STAGE 2</span>
+              <span style="color: var(--accent-primary); font-size: 0.80rem; font-weight: 600; font-family: 'JetBrains Mono', monospace;">QUANTUM CHANNEL</span>
             </div>
-            <h4 style="color: #C084FC; font-family: 'Outfit', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Quantum Transmission</h4>
-            <div style="font-size: 0.86rem; color: #E9D5FF; line-height: 1.6;">
+            <h4 style="color: var(--text-secondary); font-family: 'Inter', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Quantum Transmission</h4>
+            <div style="font-size: 0.86rem; color: var(--text-primary); line-height: 1.6;">
               <p style="margin: 6px 0;"><strong>Step 4: State Preparation</strong><br>Prepare <code>|&psi;<sub>i</sub>&rang;</code> Pauli eigenstate from <code>(b<sub>i</sub>, Basis<sub>i</sub>)</code></p>
               <p style="margin: 6px 0;"><strong>Step 5: 3-Qubit Teleportation</strong><br>Bell measurement <code>(c0, c1)</code> + Feedforward <code>X<sup>c1</sup>Z<sup>c0</sup></code></p>
-              <p style="margin: 6px 0; color: #FF70A6;"><strong>[Adversarial Insertion Point]</strong><br>Eve operates between Alice & Bob</p>
+              <p style="margin: 6px 0; color: var(--accent-primary);"><strong>[Adversarial Insertion Point]</strong><br>Eve operates between Alice & Bob</p>
             </div>
           </div>
 
           <!-- Stage 3 -->
-          <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
+          <div style="background: var(--bg-elevated); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
               <span style="background: linear-gradient(135deg, #10B981, #059669); color: #FFF; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">STAGE 3</span>
               <span style="color: #34D399; font-size: 0.80rem; font-weight: 600; font-family: 'JetBrains Mono', monospace;">VERIFICATION</span>
             </div>
-            <h4 style="color: #34D399; font-family: 'Outfit', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Statistical Detection</h4>
-            <div style="font-size: 0.86rem; color: #E9D5FF; line-height: 1.6;">
+            <h4 style="color: #34D399; font-family: 'Inter', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Statistical Detection</h4>
+            <div style="font-size: 0.86rem; color: var(--text-primary); line-height: 1.6;">
               <p style="margin: 6px 0;"><strong>Step 6: Qubit Readout</strong><br>Bob measures <code>q2</code> in basis <code>Basis<sub>i</sub></code></p>
               <p style="margin: 6px 0;"><strong>Step 7: Mismatch Error Count</strong><br>Count positions <code>k</code> where outcome &ne; expected</p>
               <p style="margin: 6px 0;"><strong>Step 8: Binomial Test</strong><br>Calculate <code>p = P(K &ge; k | n, p<sub>0</sub>)</code> vs <code>&alpha;</code></p>
@@ -959,7 +1351,7 @@ if nav_section == "Overview":
   <!-- ═══ LABEL ROW ════════════════════════════════════════════════ -->
   <div class="labels-row">
     <div class="actor-label label-alice">
-      ⬡ ALICE<br/><span style="font-size:0.62rem;font-weight:400;color:#C084FC;">SIGNER</span>
+      ALICE<br/><span style="font-size:0.62rem;font-weight:400;color:#C084FC;">SIGNER</span>
     </div>
     <div class="label-center">
       ─── QUANTUM CHANNEL (Qiskit Aer / 3-Qubit Teleportation) ───
@@ -971,7 +1363,7 @@ if nav_section == "Overview":
       ─── CHANNEL CONTINUATION ───
     </div>
     <div class="actor-label label-bob">
-      ⬡ BOB<br/><span style="font-size:0.62rem;font-weight:400;color:#6EE7B7;">VERIFIER</span>
+      BOB<br/><span style="font-size:0.62rem;font-weight:400;color:#6EE7B7;">VERIFIER</span>
     </div>
   </div>
 
@@ -1233,7 +1625,7 @@ if nav_section == "Overview":
   <!-- ═══ DECISION OUTCOME ════════════════════════════════════════ -->
   <div class="decision-row">
     <div class="decision-box dec-accept">
-      <span class="dec-icon">✓</span>
+      <span class="dec-icon">●</span>
       <div>
         <div>p-value &gt; α</div>
         <div style="font-size:0.65rem;font-weight:400;letter-spacing:0.02em;margin-top:1px;">
@@ -1242,7 +1634,7 @@ if nav_section == "Overview":
       </div>
     </div>
     <div class="decision-box dec-reject">
-      <span class="dec-icon">⚠</span>
+      <span class="dec-icon">▲</span>
       <div>
         <div>p-value ≤ α</div>
         <div style="font-size:0.65rem;font-weight:400;letter-spacing:0.02em;margin-top:1px;">
@@ -1261,22 +1653,22 @@ if nav_section == "Overview":
   </div>
   <div class="timeline">
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">MSG<br/>Input</div>
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">SHA-256<br/>Hash</div>
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">State<br/>Prepare</div>
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">Transmit<br/>(Bell)</div>
     </div>
     <div class="tl-connector"></div>
@@ -1286,17 +1678,17 @@ if nav_section == "Overview":
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">Bob<br/>Measure</div>
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">Binomial<br/>Verify</div>
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">Security<br/>Decision</div>
     </div>
   </div>
@@ -1367,6 +1759,61 @@ function toggleAttack(active) {
 </body>
 </html>
 """
+        # The component renders inside an iframe and therefore cannot inherit the
+        # page's CSS custom properties, so the active theme is substituted into the
+        # markup directly. Three actors stay visually distinct: signer = accent,
+        # adversary = warning, verifier = success.
+        _actor = {"alice": T["accent"], "eve": T["warning"], "bob": T["success"]}
+
+        def _rgb(hex_colour: str) -> str:
+            """Return "r, g, b" for a #rrggbb string."""
+            h = hex_colour.lstrip("#")
+            return ", ".join(str(int(h[i:i + 2], 16)) for i in (0, 2, 4))
+
+        # Drop the glow treatments before any colour substitution runs.
+        for _glow in (
+            "box-shadow: 0 0 12px rgba(16,185,129,0.15);",
+            "box-shadow: 0 0 12px rgba(239,68,68,0.12);",
+            'filter="url(#f-alice)"',
+            'filter="url(#f-eve)"',
+            'filter="url(#f-bob)"',
+        ):
+            _protocol_html = _protocol_html.replace(_glow, "")
+
+        for _old, _new in (
+            ("#080410", T["bg_elevated"]),
+            ("#E9D5FF", T["text_primary"]),
+            ("#F472B6", _actor["alice"]), ("#EC4899", _actor["alice"]),
+            ("#F9A8D4", _actor["alice"]), ("#C084FC", _actor["alice"]),
+            ("#D8B4FE", _actor["alice"]), ("#A855F7", _actor["alice"]),
+            ("#FBBF24", _actor["eve"]), ("#FDE68A", _actor["eve"]),
+            ("#D97706", _actor["eve"]),
+            ("#34D399", _actor["bob"]), ("#6EE7B7", _actor["bob"]),
+            ("#A7F3D0", _actor["bob"]),
+            ("#F87171", T["danger"]),
+            ("#6366F1", T["series"][3]), ("#818CF8", T["series"][3]),
+            ("#A5B4FC", T["series"][3]),
+            ("#7DD3FC", T["series"][4]), ("#38BDF8", T["series"][4]),
+            ("#6B7280", T["text_secondary"]), ("#9CA3AF", T["text_secondary"]),
+            ("#4B5563", T["border"]),
+        ):
+            _protocol_html = _protocol_html.replace(_old, _new)
+
+        _rgba_map = {
+            "236,72,153": _actor["alice"], "168,85,247": _actor["alice"],
+            "251,191,36": _actor["eve"],
+            "52,211,153": _actor["bob"], "16,185,129": _actor["bob"],
+            "239,68,68": T["danger"],
+            "99,102,241": T["series"][3], "56,189,248": T["series"][4],
+            "75,85,99": T["border"], "100,100,130": T["border"],
+        }
+        for _alpha in ("0.07", "0.08", "0.10", "0.12", "0.15", "0.18",
+                       "0.2", "0.25", "0.35", "0.4", "0.55"):
+            for _triplet, _target in _rgba_map.items():
+                _protocol_html = _protocol_html.replace(
+                    f"rgba({_triplet},{_alpha})", f"rgba({_rgb(_target)},{_alpha})"
+                )
+
         _stc.html(_protocol_html, height=900, scrolling=False)
 
 
@@ -1426,12 +1873,180 @@ elif nav_section == "Protocol":
 
     protocol_sub = st.radio(
         "Section",
-        ["Architecture Diagram", "Classical Encoding Inspector", "Signature Verification"],
+        [
+            "Mathematical Model",
+            "Architecture Diagram",
+            "Classical Encoding Inspector",
+            "Signature Verification",
+        ],
         horizontal=True,
     )
 
+    # ── 2z: Formal Mathematical Model ─────────────────────────────────────────
+    if protocol_sub == "Mathematical Model":
+        st.header("Formal Mathematical Model")
+        st.caption(
+            "Complete derivation in docs/mathematical_model.md. This page reproduces the "
+            "core results that the implementation depends on."
+        )
+
+        st.subheader("1. Classical Preprocessing and Session Binding")
+        st.latex(r"P = M \,\|\, \mathrm{id} \,\|\, \nu \,\|\, c \,\|\, t")
+        st.latex(r"D = \mathrm{SHA\text{-}256}(P) \in \{0,1\}^{256}")
+        st.latex(r"b_i = d_i \oplus K_i, \qquad i = 0, \dots, 255")
+        st.markdown(
+            "For a uniformly random key K, each encoded bit is uniform and statistically "
+            "independent of the digest:"
+        )
+        st.latex(r"\Pr[b_i = 0] = \Pr[d_i = K_i] = \tfrac{1}{2}")
+        st.info(
+            "This is the source of information-theoretic security. An adversary who "
+            "knows M — and therefore D — obtains ZERO information about b_i. SHA-256 "
+            "alone is not a signature: without K, anyone could compute D and prepare the "
+            "matching states."
+        )
+
+        st.subheader("2. Basis Schedule and Pauli Eigenstate Encoding")
+        st.latex(
+            r"B_i = \begin{cases} Z & i \equiv 0 \pmod 3 \\ "
+            r"X & i \equiv 1 \pmod 3 \\ Y & i \equiv 2 \pmod 3 \end{cases}"
+        )
+        st.latex(r"\sigma_{B_i} |\psi_i\rangle = \lambda_i |\psi_i\rangle, \qquad \lambda_i \in \{+1, -1\}")
+        st.dataframe(
+            [
+                {"Basis": "Z", "b=0": "|0>", "eigenvalue": "+1", "b=1": "|1>", "eigenvalue ": "-1",
+                 "Preparation": "I  /  X"},
+                {"Basis": "X", "b=0": "|+>", "eigenvalue": "+1", "b=1": "|->", "eigenvalue ": "-1",
+                 "Preparation": "H  /  HX"},
+                {"Basis": "Y", "b=0": "|+i>", "eigenvalue": "+1", "b=1": "|-i>", "eigenvalue ": "-1",
+                 "Preparation": "SH  /  SHX"},
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+        st.subheader("3. Bell-State Entanglement")
+        st.latex(r"|\Phi^+\rangle_{12} = \tfrac{1}{\sqrt{2}}\left(|00\rangle + |11\rangle\right)")
+        st.latex(
+            r"\langle \sigma_Z \otimes \sigma_Z \rangle = +1, \quad "
+            r"\langle \sigma_X \otimes \sigma_X \rangle = +1, \quad "
+            r"\langle \sigma_Y \otimes \sigma_Y \rangle = -1"
+        )
+
+        st.subheader("4. Quantum Teleportation")
+        st.markdown("Expanding in the Bell basis of Alice's two qubits:")
+        st.latex(
+            r"|\psi\rangle_0 |\Phi^+\rangle_{12} = \tfrac{1}{2}\Big["
+            r"|\Phi^+\rangle_{01}|\psi\rangle_2"
+            r"+ |\Phi^-\rangle_{01}(\sigma_Z|\psi\rangle_2)"
+            r"+ |\Psi^+\rangle_{01}(\sigma_X|\psi\rangle_2)"
+            r"+ |\Psi^-\rangle_{01}(\sigma_X\sigma_Z|\psi\rangle_2)\Big]"
+        )
+        st.markdown(
+            "Each outcome occurs with probability 1/4, **independent of the signature "
+            "state**. Alice's measurement therefore reveals nothing, and the classical "
+            "bits she sends leak nothing."
+        )
+
+        st.subheader("5. Pauli Correction Operations")
+        st.latex(r"|\psi\rangle_2 = \sigma_Z^{c_0}\, \sigma_X^{c_1}\, |\tilde\psi\rangle_2")
+        st.dataframe(
+            [
+                {"c0": 0, "c1": 0, "Bob's state": "|psi>", "Correction": "I"},
+                {"c0": 0, "c1": 1, "Bob's state": "X|psi>", "Correction": "X"},
+                {"c0": 1, "c1": 0, "Bob's state": "Z|psi>", "Correction": "Z"},
+                {"c0": 1, "c1": 1, "Bob's state": "XZ|psi>", "Correction": "XZ"},
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+        st.warning(
+            "Teleportation transports whatever state it is given, from whoever supplies "
+            "it. It does NOT authenticate. Authentication comes only from K, which "
+            "determines which state a legitimate signer would have supplied."
+        )
+
+        st.subheader("6. Projective Measurement Rules")
+        st.latex(r"\Pi_{\pm}^{(B)} = \tfrac{1}{2}\left(I \pm \sigma_B\right), \qquad "
+                 r"\Pi_+ + \Pi_- = I, \qquad \Pi_{\pm}^2 = \Pi_{\pm}")
+        st.latex(r"\Pr[\lambda = \pm 1] = \langle\psi| \Pi_{\pm}^{(B)} |\psi\rangle")
+        st.markdown(
+            "Rotations into the computational basis: Z requires none, X uses H (since "
+            "H X H† = Z), and Y uses H S† (since H S† Y (H S†)† = Z)."
+        )
+        st.success(
+            "DETERMINISTIC ACCEPTANCE: when the verification basis matches the "
+            "preparation basis, the state is an eigenstate of that observable and the "
+            "expected eigenvalue is obtained with probability exactly 1. A noiseless "
+            "channel therefore yields exactly zero verification errors, not merely few."
+        )
+
+        st.subheader("7. Verification Statistic and Decision Rule")
+        st.latex(r"E_i = \mathbb{1}\left[\lambda_i^{\mathrm{obs}} \neq \lambda_i\right], "
+                 r"\qquad k = \sum_i E_i, \qquad \hat{e} = k/n")
+        st.latex(r"H_0: p = p_0 \qquad \text{vs} \qquad H_1: p > p_0")
+        st.latex(r"\Pr[K \ge k \mid n, p_0] = \sum_{j=k}^{n} \binom{n}{j} p_0^{\,j} (1-p_0)^{\,n-j}")
+        st.markdown("Two-threshold decision rule:")
+        st.latex(
+            r"\sigma = \sqrt{\frac{p_0(1-p_0)}{n}}, \qquad "
+            r"s_a = p_0 + 3\sigma, \qquad s_v = \frac{s_a + q_{\min}}{2}"
+        )
+        st.latex(
+            r"\text{verdict} = \begin{cases} \textbf{ACCEPT} & \hat{e} \le s_a \\ "
+            r"\textbf{ABORT} & s_a < \hat{e} < s_v \\ "
+            r"\textbf{REJECT} & \hat{e} \ge s_v \end{cases}"
+        )
+        st.caption(
+            f"With the current settings (n = 256, p0 = {baseline_noise:.3f}): "
+            f"sigma = {decision_thresholds.sigma:.5f}, "
+            f"s_a = {decision_thresholds.s_accept:.4f}, "
+            f"s_v = {decision_thresholds.s_reject:.4f}."
+        )
+
+        st.subheader("8. Attack Error Rates (Derived)")
+        st.latex(r"\text{Channel tampering: } \quad \hat{e} \to \tfrac{2}{3}p, "
+                 r"\qquad (e_Z, e_X, e_Y) \to (p, 0, p)")
+        st.latex(r"\text{Intercept-resend: } \quad \hat{e} \to "
+                 r"\tfrac{1}{3}\cdot 0 + \tfrac{2}{3}\cdot\tfrac{1}{2} = \tfrac{1}{3}")
+        st.latex(r"\text{Forgery: } \quad \hat{e} \to \rho_K = \tfrac{1}{n}\sum_i K_i")
+        st.latex(r"\text{Impersonation: } \quad \hat{e} \to \tfrac{1}{2}")
+        st.latex(r"\text{Replay: } \quad \hat{e} = d_H(D, D')/n")
+
+        st.subheader("9. Forgery Probability Bound")
+        st.latex(
+            r"P_{\mathrm{forge}}(n, s_a) = "
+            r"\sum_{j=0}^{\lfloor s_a n \rfloor} \binom{n}{j} \left(\tfrac{1}{2}\right)^{n}"
+        )
+        st.caption(
+            "At n = 256 with s_a = 0.046 this is 5.64e-59, or 193.5 bits of security. "
+            "See the Security Bounds section for the full curve."
+        )
+
+        st.subheader("10. Computational Complexity")
+        st.latex(r"T_{\text{total}}(n) = O(n)")
+        st.caption(
+            "Measured empirically at exponent k = 1.01 with R^2 = 0.9997. "
+            "See the Performance section."
+        )
+
+        with st.expander("Security scope: what is NOT provided"):
+            st.markdown(
+                "- **Non-repudiation / transferability.** A full QDS scheme lets a "
+                "recipient forward a signature to a third party who reaches the same "
+                "verdict. This is a two-party authentication scheme: K is shared, so the "
+                "verifier could have produced any signature the signer could. "
+                "Transferability needs per-recipient key halves and a Gottesman-Chuang "
+                "two-threshold construction.\n"
+                "- **Composable key security.** No privacy amplification is implemented.\n"
+                "- **Coherent or collective attacks.** Only individual-qubit adversaries "
+                "are modelled.\n"
+                "- **Authenticated classical channel.** Assumed, not implemented.\n"
+                "- **Side-channel resistance.** Out of scope, except constant-time token "
+                "comparison."
+            )
+
     # ── 2a: Architecture Diagram ──────────────────────────────────────────────
-    if protocol_sub == "Architecture Diagram":
+    elif protocol_sub == "Architecture Diagram":
         st.header("Protocol Architecture Diagram")
         st.markdown(
             "The QDS protocol comprises two fully separated domains: classical pre-processing "
@@ -1444,11 +2059,11 @@ elif nav_section == "Protocol":
             """
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin: 20px 0;">
               <!-- Alice Card -->
-              <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(236, 72, 153, 0.35); border-radius: 10px; padding: 18px;">
-                <div style="color: #F472B6; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(236, 72, 153, 0.2); padding-bottom: 6px;">
+              <div style="background: var(--bg-elevated); border: 1px solid rgba(236, 72, 153, 0.35); border-radius: 10px; padding: 18px;">
+                <div style="color: var(--accent-primary); font-family: 'Inter', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(236, 72, 153, 0.2); padding-bottom: 6px;">
                   ALICE (Classical Signer)
                 </div>
-                <div style="font-size: 0.85rem; color: #E9D5FF; line-height: 1.6;">
+                <div style="font-size: 0.85rem; color: var(--text-primary); line-height: 1.6;">
                   • <strong>Message M</strong> &rarr; <code>SHA-256(M)</code> = 256-bit Digest <code>D</code><br>
                   • <strong>Secret Key K</strong> &rarr; Compute <code>b<sub>i</sub> = d<sub>i</sub> &oplus; K<sub>i</sub></code><br>
                   • <strong>Basis Schedule</strong> &rarr; <code>Z</code> (0), <code>X</code> (1), <code>Y</code> (2)<br>
@@ -1457,24 +2072,24 @@ elif nav_section == "Protocol":
               </div>
 
               <!-- Channel Card -->
-              <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 10px; padding: 18px;">
-                <div style="color: #C084FC; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(168, 85, 247, 0.2); padding-bottom: 6px;">
+              <div style="background: var(--bg-elevated); border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 10px; padding: 18px;">
+                <div style="color: var(--text-secondary); font-family: 'Inter', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(168, 85, 247, 0.2); padding-bottom: 6px;">
                   QUANTUM CHANNEL &amp; EVE
                 </div>
-                <div style="font-size: 0.85rem; color: #E9D5FF; line-height: 1.6;">
+                <div style="font-size: 0.85rem; color: var(--text-primary); line-height: 1.6;">
                   • <code>q0</code>: Alice Signature Qubit<br>
                   • <code>(q1, q2)</code>: EPR Bell Pair (<code>H(q1) + CNOT(q1&rarr;q2)</code>)<br>
                   • <strong>Bell Measurement</strong>: <code>CNOT(q0&rarr;q1) + H(q0)</code> &rarr; <code>c0, c1</code><br>
-                  • <span style="color: #FF70A6;"><strong>[ATTACK POINT]</strong> Eve operates between transmission &amp; readout</span>
+                  • <span style="color: var(--accent-primary);"><strong>[ATTACK POINT]</strong> Eve operates between transmission &amp; readout</span>
                 </div>
               </div>
 
               <!-- Bob Card -->
-              <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 10px; padding: 18px;">
-                <div style="color: #34D399; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2); padding-bottom: 6px;">
+              <div style="background: var(--bg-elevated); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 10px; padding: 18px;">
+                <div style="color: #34D399; font-family: 'Inter', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2); padding-bottom: 6px;">
                   BOB (Classical Verifier)
                 </div>
-                <div style="font-size: 0.85rem; color: #E9D5FF; line-height: 1.6;">
+                <div style="font-size: 0.85rem; color: var(--text-primary); line-height: 1.6;">
                   • <strong>Corrections</strong>: Apply <code>X(q2)</code> if <code>c1=1</code>, <code>Z(q2)</code> if <code>c0=1</code><br>
                   • <strong>Readout</strong>: Rotate <code>q2</code> to <code>Basis<sub>i</sub></code> &amp; measure <code>c2</code><br>
                   • <strong>Mismatch Check</strong>: Compare outcome to expected eigenvalue<br>
@@ -1484,25 +2099,25 @@ elif nav_section == "Protocol":
             </div>
 
             <div style="margin-top: 20px;">
-              <h4 style="color: #FF70A6; font-family: 'Outfit', sans-serif; margin-bottom: 10px;">Pauli Eigenstate Encoding Table</h4>
+              <h4 style="color: var(--accent-primary); font-family: 'Inter', sans-serif; margin-bottom: 10px;">Pauli Eigenstate Encoding Table</h4>
               <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;">
                 <div style="background: rgba(16, 7, 32, 0.8); border: 1px solid rgba(236, 72, 153, 0.25); border-radius: 8px; padding: 12px;">
-                  <strong style="color: #F472B6;">Basis Z (i mod 3 = 0)</strong><br>
-                  <span style="font-size: 0.84rem; color: #E9D5FF;">
+                  <strong style="color: var(--accent-primary);">Basis Z (i mod 3 = 0)</strong><br>
+                  <span style="font-size: 0.84rem; color: var(--text-primary);">
                     b=0 &rarr; <code>|0&rang; = [1, 0]^T</code> (+1)<br>
                     b=1 &rarr; <code>|1&rang; = [0, 1]^T</code> (-1)
                   </span>
                 </div>
                 <div style="background: rgba(16, 7, 32, 0.8); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 12px;">
                   <strong style="color: #38BDF8;">Basis X (i mod 3 = 1)</strong><br>
-                  <span style="font-size: 0.84rem; color: #E9D5FF;">
+                  <span style="font-size: 0.84rem; color: var(--text-primary);">
                     b=0 &rarr; <code>|+&rang; = 1/&radic;2 [1, 1]^T</code> (+1)<br>
                     b=1 &rarr; <code>|-&rang; = 1/&radic;2 [1, -1]^T</code> (-1)
                   </span>
                 </div>
                 <div style="background: rgba(16, 7, 32, 0.8); border: 1px solid rgba(192, 132, 252, 0.25); border-radius: 8px; padding: 12px;">
-                  <strong style="color: #C084FC;">Basis Y (i mod 3 = 2)</strong><br>
-                  <span style="font-size: 0.84rem; color: #E9D5FF;">
+                  <strong style="color: var(--text-secondary);">Basis Y (i mod 3 = 2)</strong><br>
+                  <span style="font-size: 0.84rem; color: var(--text-primary);">
                     b=0 &rarr; <code>|+i&rang; = 1/&radic;2 [1, i]^T</code> (+1)<br>
                     b=1 &rarr; <code>|-i&rang; = 1/&radic;2 [1, -i]^T</code> (-1)
                   </span>
@@ -1558,10 +2173,11 @@ elif nav_section == "Protocol":
         )
         grid = np.array(digest_bits).reshape(16, 16)
         fig_bm, ax_bm = plt.subplots(figsize=(3.5, 3.5))
-        ax_bm.imshow(grid, cmap="binary", vmin=0, vmax=1, interpolation="nearest", aspect="equal")
+        ax_bm.imshow(grid, cmap=T["bitmap_cmap"], vmin=0, vmax=1, interpolation="nearest", aspect="equal")
         ax_bm.set_title(f"SHA-256 Digest Bitmap: M = \"{message}\"", fontsize=9)
         ax_bm.set_xticks([])
         ax_bm.set_yticks([])
+        _apply_plot_theme(fig_bm, ax_bm)
         st.pyplot(fig_bm)
         plt.close(fig_bm)
 
@@ -1608,7 +2224,7 @@ elif nav_section == "Protocol":
                 "State |psi_i>": eq_.state_label,
                 "Eigenvalue": eq_.expected_eigenvalue,
             })
-        st.dataframe(rows, use_container_width=True)
+        st.dataframe(rows, width="stretch")
 
     # ── 2c: Signature Verification ───────────────────────────────────────────
     else:
@@ -1723,17 +2339,14 @@ elif nav_section == "Quantum Lab":
             values = list(counts.values())
 
             fig_h, ax_h = plt.subplots(figsize=(max(4, len(labels) * 0.8 + 2), 3))
-            fig_h.patch.set_facecolor('#130825')
-            ax_h.set_facecolor('#0B0414')
-            ax_h.bar(range(len(labels)), values, color="#EC4899", width=0.5, edgecolor="#FF70A6")
+            ax_h.bar(range(len(labels)), values, color=T["accent"], width=0.5)
             ax_h.set_xticks(range(len(labels)))
-            ax_h.set_xticklabels(labels, fontfamily="monospace", fontsize=8, color="#F3E8FF")
-            ax_h.set_ylabel("Count", color="#E9D5FF")
-            ax_h.set_title(f"AerSimulator Outcome Distribution (N = {total_shots} shots)", color="#FF70A6", fontsize=9, fontweight="bold")
-            ax_h.grid(True, axis="y", linestyle="--", alpha=0.2, color="#A855F7")
-            ax_h.tick_params(colors="#C084FC")
-            for spine in ax_h.spines.values():
-                spine.set_color((236/255, 72/255, 153/255, 0.3))
+            ax_h.set_xticklabels(labels, fontfamily="monospace", fontsize=8)
+            ax_h.set_ylabel("Count")
+            ax_h.set_title(f"AerSimulator Outcome Distribution (N = {total_shots} shots)",
+                           fontsize=9, fontweight="bold")
+            ax_h.grid(True, axis="y", linestyle="--", alpha=0.3, color=T["grid"])
+            _apply_plot_theme(fig_h, ax_h)
             fig_h.tight_layout()
             st.pyplot(fig_h)
             plt.close(fig_h)
@@ -1828,17 +2441,18 @@ elif nav_section == "Quantum Lab":
                 "Prepared State": eq.state_label,
                 "Expected Eigenvalue": eq.expected_eigenvalue,
             })
-        st.dataframe(rows, use_container_width=True)
+        st.dataframe(rows, width="stretch")
 
         st.subheader("Encoded Bit Distribution Bitmap")
         st.markdown("The 256 encoded bits b_i visualized as a 16x16 pixel grid. Black = 1, White = 0.")
         encoded_bits_arr = np.array([eq.encoded_bit for eq in encoded_qubits]).reshape(16, 16)
         fig_eb, ax_eb = plt.subplots(figsize=(3.5, 3.5))
-        ax_eb.imshow(encoded_bits_arr, cmap="binary", vmin=0, vmax=1,
+        ax_eb.imshow(encoded_bits_arr, cmap=T["bitmap_cmap"], vmin=0, vmax=1,
                      interpolation="nearest", aspect="equal")
         ax_eb.set_title("Encoded Bits b_i (b_i = d_i XOR K_i)", fontsize=9)
         ax_eb.set_xticks([])
         ax_eb.set_yticks([])
+        _apply_plot_theme(fig_eb, ax_eb)
         st.pyplot(fig_eb)
         plt.close(fig_eb)
 
@@ -1901,7 +2515,7 @@ elif nav_section == "Hardware Validation":
             )
         with ch_col2:
             st.markdown(" ")
-            if st.button("AUTHENTICATE & SAVE CREDENTIALS", type="secondary", use_container_width=True):
+            if st.button("AUTHENTICATE & SAVE CREDENTIALS", type="secondary", width="stretch"):
                 with st.spinner("Verifying credentials with IBM Quantum..."):
                     st.session_state["IBM_QUANTUM_API_TOKEN"] = token_input.strip()
                     st.session_state["IBM_QUANTUM_INSTANCE_CRN"] = instance_input.strip()
@@ -2153,8 +2767,6 @@ elif nav_section == "Hardware Validation":
 
         # Side-by-side Matplotlib chart comparison
         fig_hw_bar, ax_hw_bar = plt.subplots(figsize=(8.5, 3.8))
-        fig_hw_bar.patch.set_facecolor("#110722")
-        ax_hw_bar.set_facecolor("#0A0414")
 
         all_outcomes = sorted(list(set(list(ideal_counts.keys()) + list(hw_counts.keys()))))
         x_indices = np.arange(len(all_outcomes))
@@ -2165,18 +2777,19 @@ elif nav_section == "Hardware Validation":
         hw_pcts = [(hw_counts.get(out, 0) / hw_tot) * 100.0 for out in all_outcomes]
 
         target_label = f"Target ({res['hardware_backend']})"
-        ax_hw_bar.bar(x_indices - bar_width/2, ideal_pcts, width=bar_width, label="Noiseless Aer Simulation (Ideal)", color="#EC4899", alpha=0.88)
-        ax_hw_bar.bar(x_indices + bar_width/2, hw_pcts, width=bar_width, label=target_label, color="#38BDF8", alpha=0.88)
+        ax_hw_bar.bar(x_indices - bar_width/2, ideal_pcts, width=bar_width,
+                      label="Noiseless Aer Simulation (Ideal)", color=T["series"][0])
+        ax_hw_bar.bar(x_indices + bar_width/2, hw_pcts, width=bar_width,
+                      label=target_label, color=T["series"][1])
 
         ax_hw_bar.set_xticks(x_indices)
-        ax_hw_bar.set_xticklabels([f"|{out}⟩" for out in all_outcomes], color="#E9D5FF", fontsize=9)
-        ax_hw_bar.set_ylabel("Readout Probability (%)", color="#E9D5FF", fontsize=9)
-        ax_hw_bar.set_title(f"Quantum Teleportation Measurement Distribution (|ψᵢ⟩ = {hw_state}, Basis = {hw_basis})", color="#FF70A6", fontsize=10, fontweight="bold")
-        ax_hw_bar.tick_params(colors="#C084FC")
-        ax_hw_bar.grid(True, linestyle="--", alpha=0.2, color="#A855F7")
-        for spine in ax_hw_bar.spines.values():
-            spine.set_color((0.925, 0.282, 0.6, 0.35))
-        ax_hw_bar.legend(facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF", fontsize=8.5)
+        ax_hw_bar.set_xticklabels([f"|{out}⟩" for out in all_outcomes], fontsize=9)
+        ax_hw_bar.set_ylabel("Readout Probability (%)", fontsize=9)
+        ax_hw_bar.set_title(f"Quantum Teleportation Measurement Distribution (|ψᵢ⟩ = {hw_state}, Basis = {hw_basis})",
+                            fontsize=10, fontweight="bold")
+        ax_hw_bar.grid(True, linestyle="--", alpha=0.3, color=T["grid"])
+        ax_hw_bar.legend(fontsize=8.5)
+        _apply_plot_theme(fig_hw_bar, ax_hw_bar, legend=True)
         fig_hw_bar.tight_layout()
         st.pyplot(fig_hw_bar)
         plt.close(fig_hw_bar)
@@ -2197,7 +2810,7 @@ elif nav_section == "Hardware Validation":
                 "Target Backend (%)": f"{hw_pct:.2f}%",
                 "Noise Delta (Δ%)": f"{delta_pct:+.2f}%",
             })
-        st.dataframe(tbl_comp, use_container_width=True)
+        st.dataframe(tbl_comp, width="stretch")
 
         # Transpiled Gate Decomposition
         st.subheader("Transpiled Native Gate Breakdown")
@@ -2240,6 +2853,8 @@ elif nav_section == "Security Lab":
             "Impersonation (Random State Guess)",
             "Quantum Interception (Intercept-Resend)",
             "Replay Attack",
+            "Replay Attack (Same Message, Nonce Reuse)",
+            "Unauthorized Verification Attempt",
         ],
     )
 
@@ -2288,7 +2903,7 @@ elif nav_section == "Security Lab":
             res: ExperimentResult = st.session_state.ch_result
 
             # Section F: Circuit Comparison
-            st.markdown('<div class="sec-header">F. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">E. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
             st.markdown(
                 "Modified operation: Injected Pauli-X gate on q2 with probability $p_{\\text{atk}}$ before Bob's basis readout."
             )
@@ -2310,7 +2925,7 @@ elif nav_section == "Security Lab":
             _render_measurement_and_stochasticity_block(res, theo_exp_str=f"{(2.0/3.0)*p_att:.4f}")
 
             # Section H: Theoretical vs Observed
-            st.markdown('<div class="sec-header">H. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">G. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
             tot_x = res.relevant_params.get("total_x_injected", "N/A")
             st.markdown(
                 f"- **Injected Bit-Flips (X applied)**: `{tot_x}` / {res.total_trials} positions\n"
@@ -2384,7 +2999,7 @@ elif nav_section == "Security Lab":
             res: ExperimentResult = st.session_state.forg_result
 
             # Section F: Circuit Difference
-            st.markdown('<div class="sec-header">F. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">E. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
             st.markdown(
                 "Modified operation: Alice's state preparation uses $b'_i = d_i$ instead of $b_i = d_i \\oplus K_i$."
             )
@@ -2393,7 +3008,7 @@ elif nav_section == "Security Lab":
             _render_measurement_and_stochasticity_block(res, theo_exp_str=f"{theo_forgery:.4f}")
 
             # Section H: Theoretical vs Observed
-            st.markdown('<div class="sec-header">H. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">G. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
             st.markdown(
                 f"- **Secret Key K 1-Density**: `{key_ones}/256 = {theo_forgery:.4f}`\n"
                 f"- **Expected Mismatch Rate**: `{theo_forgery:.4f}`\n"
@@ -2455,7 +3070,7 @@ elif nav_section == "Security Lab":
             res: ExperimentResult = st.session_state.imp_result
 
             # Section F: Circuit Difference
-            st.markdown('<div class="sec-header">F. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">E. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
             st.markdown(
                 "Modified operation: Alice state preparation uses random Bernoulli(0.5) guesses $b'_i$."
             )
@@ -2464,7 +3079,7 @@ elif nav_section == "Security Lab":
             _render_measurement_and_stochasticity_block(res, theo_exp_str="0.5000 (50%)")
 
             # Section H: Theoretical vs Observed
-            st.markdown('<div class="sec-header">H. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">G. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
             st.markdown(
                 f"- **Theoretical Expectation**: 0.5000 (50% error rate)\n"
                 f"- **Observed Verification Error Rate**: `{res.observed_error_rate:.4f}` ({res.num_errors} errors)\n"
@@ -2533,7 +3148,7 @@ elif nav_section == "Security Lab":
             res: ExperimentResult = st.session_state.int_result
 
             # Section F: Circuit Comparison
-            st.markdown('<div class="sec-header">F. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">E. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
             st.markdown(
                 "Modified operation: Injected Eve basis measurement, qc.reset(0), and conditional re-preparation on q0."
             )
@@ -2556,7 +3171,7 @@ elif nav_section == "Security Lab":
             _render_measurement_and_stochasticity_block(res, theo_exp_str="0.3333 (~33.3%)")
 
             # Section H: Theoretical vs Observed
-            st.markdown('<div class="sec-header">H. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">G. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
             same_cnt = res.relevant_params.get("same_basis_trials", "N/A")
             diff_cnt = res.relevant_params.get("diff_basis_trials", "N/A")
             st.markdown(
@@ -2640,7 +3255,7 @@ elif nav_section == "Security Lab":
                 diff_mask = (grid_orig != grid_tgt).astype(float)
 
                 fig_bmp, axes = plt.subplots(1, 3, figsize=(8, 3))
-                axes[0].imshow(grid_orig, cmap="binary", vmin=0, vmax=1, aspect="equal")
+                axes[0].imshow(grid_orig, cmap=T["bitmap_cmap"], vmin=0, vmax=1, aspect="equal")
                 axes[0].set_title(f"SHA-256(\"{message}\")", fontsize=8)
                 axes[0].set_xticks([]); axes[0].set_yticks([])
 
@@ -2652,10 +3267,11 @@ elif nav_section == "Security Lab":
                 axes[1].set_title(f"Differences ({hd} bits)", fontsize=8)
                 axes[1].set_xticks([]); axes[1].set_yticks([])
 
-                axes[2].imshow(grid_tgt, cmap="binary", vmin=0, vmax=1, aspect="equal")
+                axes[2].imshow(grid_tgt, cmap=T["bitmap_cmap"], vmin=0, vmax=1, aspect="equal")
                 axes[2].set_title(f"SHA-256(\"{target_msg}\")", fontsize=8)
                 axes[2].set_xticks([]); axes[2].set_yticks([])
 
+                _apply_plot_theme(fig_bmp, *axes)
                 fig_bmp.tight_layout()
                 st.pyplot(fig_bmp)
                 plt.close(fig_bmp)
@@ -2670,6 +3286,218 @@ elif nav_section == "Security Lab":
                 _render_measurement_and_stochasticity_block(res, theo_exp_str=f"{hf:.4f}")
                 _render_position_trace_table_and_map(res.detailed_results, attack_type="signature_replay")
                 _render_hypothesis_test_block(res)
+
+    # ────────────────────────────────────────────────
+    # ATTACK: Same-Message Replay via Nonce Reuse
+    # ────────────────────────────────────────────────
+    elif attack_choice == "Replay Attack (Same Message, Nonce Reuse)":
+        st.header("Replay Attack: Same Message, Nonce Reuse")
+
+        st.markdown('<div class="sec-header">A. THE PROBLEM THIS SOLVES</div>',
+                    unsafe_allow_html=True)
+        st.markdown(
+            "Without freshness binding the encoding is deterministic: D = SHA-256(M), "
+            "b_i = d_i XOR K_i. A captured signature for M is therefore **bit-identical** "
+            "to a fresh one, and no quantum measurement can distinguish them, because "
+            "there is nothing to distinguish. This was the protocol's one undetectable "
+            "attack."
+        )
+
+        st.markdown('<div class="sec-header">B. THE FIX</div>', unsafe_allow_html=True)
+        st.latex(r"P = M \,\|\, \mathrm{id} \,\|\, \nu \,\|\, c \,\|\, t")
+        st.latex(r"D = \mathrm{SHA\text{-}256}(P), \qquad b_i = d_i \oplus K_i")
+        st.markdown(
+            "Replay is now defeated by **two independent mechanisms**:\n\n"
+            "1. **Classical (O(1)):** the verifier's nonce registry has already consumed "
+            "that nonce, so the replay is rejected before any quantum state is measured.\n"
+            "2. **Quantum (O(n)):** if the attacker invents a fresh nonce to evade the "
+            "registry, the bound digest changes and she must re-derive all 256 states "
+            "for it. Without K that is exactly the forgery problem, detected at ~50% "
+            "error."
+        )
+
+        st.markdown('<div class="sec-header">C. RUN COMPARISON</div>',
+                    unsafe_allow_html=True)
+        st.caption(
+            "Both modes replay the same captured signature for the same message. Only "
+            "the freshness binding differs."
+        )
+
+        if st.button("RUN SAME-MESSAGE REPLAY (BOTH MODES)", type="primary"):
+            with st.spinner("Executing both modes..."):
+                legacy_res = run_replay_attack(
+                    original_message=message,
+                    target_message=message,
+                    shared_key=shared_key,
+                    shots_per_qubit=shots_per_qubit,
+                    baseline_error_rate=baseline_noise,
+                    alpha=alpha,
+                    backend=active_backend_adapter,
+                    seed=seed,
+                )
+                demo_session = create_session(signer_id="alice", counter=1)
+                protected_res = run_replay_attack(
+                    original_message=message,
+                    target_message=message,
+                    shared_key=shared_key,
+                    shots_per_qubit=shots_per_qubit,
+                    baseline_error_rate=baseline_noise,
+                    alpha=alpha,
+                    backend=active_backend_adapter,
+                    seed=seed,
+                    original_session=demo_session,
+                    nonce_registry=NonceRegistry(),
+                )
+
+            col_legacy, col_prot = st.columns(2)
+
+            with col_legacy:
+                st.markdown("#### Legacy: no freshness binding")
+                st.metric("Observed error rate", f"{legacy_res['observed_error_rate']:.4f}")
+                st.metric(
+                    "Detected",
+                    "NO" if not legacy_res["replay_detected_classically"] else "YES",
+                )
+                st.error(
+                    "ATTACK SUCCEEDS: the replayed signature is indistinguishable from "
+                    "a fresh one."
+                )
+                st.caption(legacy_res["protocol_note"])
+
+            with col_prot:
+                st.markdown("#### Protected: session nonce bound")
+                st.metric("Observed error rate", f"{protected_res['observed_error_rate']:.4f}")
+                st.metric(
+                    "Detected",
+                    "YES" if protected_res["replay_detected_classically"] else "NO",
+                )
+                if protected_res["replay_detected_classically"]:
+                    st.success(
+                        "ATTACK BLOCKED: nonce already consumed. Rejected in O(1) "
+                        "before any quantum state was measured."
+                    )
+                st.caption(protected_res["protocol_note"])
+
+            st.info(
+                "Note that the quantum error rate is ~0 in BOTH columns. That is the "
+                "point: the quantum layer genuinely cannot see this attack. Detection "
+                "comes from the classical freshness mechanism, which is why the "
+                "framework needs both."
+            )
+
+            audit_logger.log_event(
+                event_type="REPLAY_BLOCKED",
+                severity="CRITICAL",
+                verdict="REJECT",
+                message_digest_prefix=sha256_hex(message)[:16],
+                detail={
+                    "attack_name": "Replay Attack (Same Message, Nonce Reuse)",
+                    "freshness_enabled": True,
+                    "replay_detected_classically": protected_res["replay_detected_classically"],
+                    "observed_error_rate": protected_res["observed_error_rate"],
+                },
+            )
+
+    # ────────────────────────────────────────────────
+    # ATTACK: Unauthorized Verification Attempt
+    # ────────────────────────────────────────────────
+    elif attack_choice == "Unauthorized Verification Attempt":
+        st.header("Unauthorized Verification Attempt")
+
+        st.markdown('<div class="sec-header">A. THREAT MODEL</div>', unsafe_allow_html=True)
+        st.markdown(
+            "A party attempts to verify a signature without being entitled to. Three "
+            "attacker profiles are modelled:\n\n"
+            "- **NO_TOKEN** — presents no authorization token at all.\n"
+            "- **FORGED_TOKEN** — fabricates a token of the correct shape.\n"
+            "- **WRONG_IDENTITY** — presents a token validly issued to somebody else "
+            "(token substitution / relay)."
+        )
+
+        st.markdown('<div class="sec-header">B. MECHANISM</div>', unsafe_allow_html=True)
+        st.latex(r"\tau = \mathrm{HMAC\text{-}SHA256}_{K_M}(\mathrm{id})")
+        st.markdown(
+            "Tokens are compared in constant time via `hmac.compare_digest`. Detection "
+            "is **deterministic**: a token either validates or it does not. There is no "
+            "statistical uncertainty and therefore no false-positive rate, unlike the "
+            "measurement-based detectors used for the quantum attacks."
+        )
+        st.info(
+            "WHY EARLY REJECTION MATTERS: quantum states cannot be copied and are "
+            "destroyed by measurement. A party allowed to measure a signature consumes "
+            "it, so unrestricted verification is itself a denial-of-service vector "
+            "against legitimate verifiers. Authorization runs before the quantum stage."
+        )
+
+        st.markdown('<div class="sec-header">C. RUN ALL PROFILES</div>',
+                    unsafe_allow_html=True)
+        unauth_subset = st.slider(
+            "Signature positions to verify in the control run", 8, 64, 24, 8
+        )
+
+        if st.button("RUN UNAUTHORIZED VERIFICATION SWEEP", type="primary"):
+            with st.spinner("Attempting verification under each attacker profile..."):
+                sweep = run_authorization_profile_sweep(
+                    message=message,
+                    shared_key=shared_key,
+                    sample_indices=list(range(int(unauth_subset))),
+                    baseline_error_rate=baseline_noise,
+                    backend=active_backend_adapter,
+                    seed=seed,
+                )
+
+            st.dataframe(
+                [
+                    {
+                        "Attacker Profile": r["attacker_profile"],
+                        "Token Presented": "Yes" if r["token_presented"] else "No",
+                        "Denied": "YES" if r["denied"] else "NO",
+                        "Detection": "Deterministic" if r["detection_is_deterministic"] else "Statistical",
+                        "Quantum States Consumed": r["quantum_states_consumed_by_attacker"],
+                        "Legitimate Verifier Still Accepted": (
+                            "Yes" if r["control_verification_accepted"] else "No"
+                        ),
+                    }
+                    for r in sweep
+                ],
+                width="stretch",
+                hide_index=True,
+            )
+
+            if all(r["denied"] for r in sweep):
+                st.success(
+                    "ALL UNAUTHORIZED PROFILES DENIED. Zero signature states were "
+                    "consumed by any attacker, and the legitimate verifier was still "
+                    "accepted in every case — access control does not impair authorized "
+                    "use."
+                )
+            else:
+                st.error("At least one unauthorized profile was NOT denied.")
+
+            for r in sweep:
+                st.caption(r["interpretation"])
+                audit_logger.log_event(
+                    event_type="AUTH_DENIED" if r["denied"] else "AUTH_GRANTED",
+                    severity="CRITICAL" if r["denied"] else "INFO",
+                    message_digest_prefix=sha256_hex(message)[:16],
+                    detail={
+                        "attack_name": "Unauthorized Verification",
+                        "attacker_profile": r["attacker_profile"],
+                        "attacker_id": r["attacker_id"],
+                        "denied": r["denied"],
+                        "quantum_states_consumed": r["quantum_states_consumed_by_attacker"],
+                    },
+                )
+
+        st.markdown('<div class="sec-header">D. SCOPE DISCLOSURE</div>',
+                    unsafe_allow_html=True)
+        st.warning(
+            "This is a CLASSICAL access-control mechanism, not an information-theoretic "
+            "one. Its security rests on the PRF security of HMAC-SHA256 and on the "
+            "master secret remaining secret. It is included because unauthorized "
+            "verification is a named threat in the framework's scope and the quantum "
+            "layer cannot address it: quantum states do not encode who may measure them."
+        )
 
 
 # =============================================================================
@@ -2739,24 +3567,20 @@ elif nav_section == "Analysis":
             y_obs = [d["observed_error_rate"] for d in y_data]
 
             fig_bw, axes_bw = plt.subplots(1, 3, figsize=(13, 4), sharey=True)
-            fig_bw.patch.set_facecolor('#130825')
             for ax_, obs_, label_, color_ in zip(
                 axes_bw,
                 [z_obs, x_obs, y_obs],
                 ["Z Basis (Sensitive)", "X Basis (Invariant)", "Y Basis (Sensitive)"],
-                ["#FF2A85", "#38BDF8", "#C084FC"],
+                [T["series"][0], T["series"][1], T["series"][2]],
             ):
-                ax_.set_facecolor('#0B0414')
                 ax_.plot(ps, obs_, "o-", color=color_, linewidth=2, markersize=6, label="Observed")
-                ax_.set_xlabel(r"$p_{\mathrm{atk}}$", color="#E9D5FF")
-                ax_.set_title(label_, fontsize=10, color="#FF70A6", fontweight="bold")
-                ax_.grid(True, linestyle="--", alpha=0.2, color="#A855F7")
-                ax_.tick_params(colors="#C084FC")
-                for spine in ax_.spines.values():
-                    spine.set_color((236/255, 72/255, 153/255, 0.3))
-                ax_.legend(fontsize=8, facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF")
+                ax_.set_xlabel(r"$p_{\mathrm{atk}}$")
+                ax_.set_title(label_, fontsize=10, fontweight="bold")
+                ax_.grid(True, linestyle="--", alpha=0.3, color=T["grid"])
+                ax_.legend(fontsize=8)
 
-            axes_bw[0].set_ylabel("Verification Error Rate", color="#E9D5FF")
+            axes_bw[0].set_ylabel("Verification Error Rate")
+            _apply_plot_theme(fig_bw, *axes_bw, legend=True)
             fig_bw.tight_layout()
             st.pyplot(fig_bw)
             plt.close(fig_bw)
@@ -2802,7 +3626,7 @@ elif nav_section == "Analysis":
                     "Binomial p-value": f"{r.threat_result.p_value:.4e}",
                     "Threat Decision": "THREAT DETECTED" if r.threat_result.threat_detected else "NORMAL CHANNEL",
                 })
-            st.dataframe(tbl_data, use_container_width=True)
+            st.dataframe(tbl_data, width="stretch")
 
             st.subheader("Qualitative Security Mechanism Comparison")
             qual_data = [
@@ -2849,11 +3673,658 @@ elif nav_section == "Analysis":
                     "Why Detection Works": "SHA-256 digest Hamming distance causes errors for diff message",
                 },
             ]
-            st.dataframe(qual_data, use_container_width=True)
+            st.dataframe(qual_data, width="stretch")
 
 
 # =============================================================================
-#  SECTION 7: REPRODUCIBILITY
+#  SECTION 7: KEY DISTRIBUTION (BBM92 ENTANGLEMENT-BASED QKD)
+# =============================================================================
+elif nav_section == "Key Distribution":
+    st.title("QUANTUM KEY DISTRIBUTION — BBM92")
+    st.caption(
+        "Establishes the shared secret key K from measured Bell pairs rather than "
+        "assuming it was pre-shared. This is the quantum public key distribution stage "
+        "of the protocol."
+    )
+
+    st.header("Protocol")
+    st.markdown(
+        "1. A Bell state is prepared and split between Alice and Bob.\n"
+        "2. Each independently chooses a random measurement basis and measures.\n"
+        "3. Bases are disclosed over an authenticated public channel; mismatches are "
+        "discarded (**sifting**).\n"
+        "4. A random sample of surviving bits is disclosed to estimate the QBER, then "
+        "discarded.\n"
+        "5. The remainder becomes the key."
+    )
+    st.latex(r"|\Phi^+\rangle = \frac{1}{\sqrt{2}}\left(|00\rangle + |11\rangle\right)")
+    st.latex(
+        r"\langle Z\otimes Z\rangle = +1, \qquad "
+        r"\langle X\otimes X\rangle = +1, \qquad "
+        r"\langle Y\otimes Y\rangle = -1"
+    )
+    st.warning(
+        "The Y-basis correlation is NEGATIVE. Measuring Y on both halves of this Bell "
+        "state yields opposite outcomes, so Bob must invert his Y-basis results during "
+        "reconciliation. Omitting that inversion produces a 100% error rate on Y-sifted "
+        "positions."
+    )
+
+    st.header("Eavesdropper Detection")
+    st.latex(
+        r"\mathrm{QBER}_{\text{intercept-resend}} = "
+        r"\left(1 - \frac{1}{B}\right)\cdot\frac{1}{2}"
+    )
+    st.markdown(
+        "where B is the number of bases in use. Two bases give the textbook BB84 value "
+        "of **25%**; three bases give **33.3%**. An honest channel on an ideal simulator "
+        "yields QBER = 0, so any excess is eavesdropping or hardware noise."
+    )
+
+    st.header("Run Distribution")
+    qkd_col1, qkd_col2, qkd_col3 = st.columns(3)
+    with qkd_col1:
+        qkd_raw = st.select_slider(
+            "Bell pairs to distribute", options=[200, 400, 800, 1600, 3000], value=800
+        )
+    with qkd_col2:
+        qkd_basis_choice = st.radio(
+            "Measurement bases", options=["Z, X (BBM92 standard)", "Z, X, Y"], index=0
+        )
+    with qkd_col3:
+        qkd_eve = st.checkbox("Simulate intercept-resend eavesdropper", value=False)
+
+    qkd_bases = DEFAULT_QKD_BASES if qkd_basis_choice.startswith("Z, X (") else ALL_QKD_BASES
+
+    if st.button("RUN QUANTUM KEY DISTRIBUTION", type="primary"):
+        with st.spinner("Distributing and measuring Bell pairs..."):
+            qkd_res = run_key_distribution(
+                raw_bits=int(qkd_raw),
+                bases=qkd_bases,
+                eavesdropper_present=qkd_eve,
+                qber_sample_fraction=0.5,
+                baseline_error_rate=baseline_noise,
+                alpha=alpha,
+                target_key_length=None,
+                backend=active_backend_adapter,
+                seed=seed,
+            )
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Raw pairs", qkd_res.raw_bits)
+        m2.metric("Sifted bits", qkd_res.sifted_length)
+        m3.metric("Final key bits", len(qkd_res.key_bits))
+        expected_qber = (1 - 1 / len(qkd_bases)) * 0.5 if qkd_eve else 0.0
+        m4.metric(
+            "QBER",
+            f"{qkd_res.qber:.4f}",
+            delta=f"{qkd_res.qber - expected_qber:+.4f} vs theory",
+        )
+
+        if qkd_res.threat_result is not None:
+            if qkd_res.threat_result.threat_detected:
+                st.error(
+                    "EAVESDROPPER DETECTED — " + qkd_res.threat_result.interpretation
+                )
+                st.markdown("This key must be **discarded**, not used for signing.")
+            else:
+                st.success("CHANNEL CLEAN — " + qkd_res.threat_result.interpretation)
+
+        st.info(qkd_res.interpretation)
+
+        if qkd_res.key_bits:
+            st.markdown("**Established key (first 128 bits)**")
+            st.code("".join(str(b) for b in qkd_res.key_bits[:128]), language=None)
+            st.caption(
+                f"1-bit density: {sum(qkd_res.key_bits) / len(qkd_res.key_bits):.4f} "
+                f"(0.5 expected for a well-formed key)"
+            )
+
+        audit_logger.log_event(
+            event_type="KEY_DISTRIBUTION",
+            severity="CRITICAL" if (
+                qkd_res.threat_result and qkd_res.threat_result.threat_detected
+            ) else "INFO",
+            detail={
+                "raw_bits": qkd_res.raw_bits,
+                "sifted_length": qkd_res.sifted_length,
+                "qber": qkd_res.qber,
+                "bases": qkd_res.bases_used,
+                "eavesdropper_simulated": qkd_res.eavesdropper_present,
+            },
+        )
+
+    st.header("Scope Disclosure")
+    st.markdown(
+        "- Basis reconciliation is assumed to run over an **authenticated** public "
+        "classical channel, as BBM92 requires. Authenticating it is out of scope here.\n"
+        "- **No information reconciliation or privacy amplification** is implemented, so "
+        "the sifted key is not composably secure. This models the distribution and "
+        "eavesdropper-detection stages only.\n"
+        "- All QBER values come from executed Qiskit circuits; none are hardcoded."
+    )
+
+
+# =============================================================================
+#  SECTION 8: THREAT CLASSIFICATION
+# =============================================================================
+elif nav_section == "Threat Classification":
+    st.title("QUANTUM-INSPIRED THREAT CLASSIFICATION")
+    st.caption(
+        "Identifies WHICH threat is present, not merely that an anomaly occurred. "
+        "Forgery, impersonation, and different-message replay all produce ~50% errors, "
+        "so a pooled error rate cannot separate them."
+    )
+
+    st.header("How Discrimination Works")
+    st.markdown(
+        "The classifier scores the observed basis-resolved error profile "
+        "(e_Z, e_X, e_Y) against each threat's analytically derived signature, then "
+        "applies deterministic discriminators. No AI or ML is used."
+    )
+
+    st.dataframe(
+        [
+            {"Threat": "No attack", "e_Z": "p0", "e_X": "p0", "e_Y": "p0",
+             "MCC(E,K)": "~0", "Discriminator": "All bases at calibrated baseline"},
+            {"Threat": "Channel tampering", "e_Z": "p", "e_X": "~0", "e_Y": "p",
+             "MCC(E,K)": "~0", "Discriminator": "X-BASIS IMMUNITY (unique)"},
+            {"Threat": "Intercept-resend", "e_Z": "1/3", "e_X": "1/3", "e_Y": "1/3",
+             "MCC(E,K)": "~0", "Discriminator": "Uniform at 1/3"},
+            {"Threat": "Forgery", "e_Z": "rho", "e_X": "rho", "e_Y": "rho",
+             "MCC(E,K)": "~+1", "Discriminator": "Errors track K_i = 1"},
+            {"Threat": "Impersonation", "e_Z": "1/2", "e_X": "1/2", "e_Y": "1/2",
+             "MCC(E,K)": "~0", "Discriminator": "Uniform at 1/2, independent of K"},
+            {"Threat": "Replay (diff. msg)", "e_Z": "h", "e_X": "h", "e_Y": "h",
+             "MCC(E,K)": "~0", "Discriminator": "Classical digest mismatch"},
+            {"Threat": "Replay (same msg)", "e_Z": "p0", "e_X": "p0", "e_Y": "p0",
+             "MCC(E,K)": "~0", "Discriminator": "Nonce registry (deterministic)"},
+            {"Threat": "Unauthorized verify", "e_Z": "-", "e_X": "-", "e_Y": "-",
+             "MCC(E,K)": "-", "Discriminator": "HMAC validation (deterministic)"},
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    with st.expander("Why X-basis immunity identifies channel tampering"):
+        st.latex(r"\sigma_X|+\rangle = +|+\rangle, \qquad \sigma_X|-\rangle = -|-\rangle")
+        st.markdown(
+            "Both are X eigenstates, so an X-basis measurement is invariant up to a "
+            "global phase and records no error. Z and Y eigenstates are flipped. With "
+            "the uniform basis schedule, exactly 2/3 of positions are sensitive:"
+        )
+        st.latex(r"\hat{e} \to \tfrac{2}{3}\,p \qquad (e_Z, e_X, e_Y) \to (p, 0, p)")
+        st.markdown("No other modelled attack leaves an entire basis undisturbed.")
+
+    with st.expander("Why key correlation separates forgery from impersonation"):
+        st.markdown(
+            "A digest-only forger prepares states from d_i while the verifier expects "
+            "d_i XOR K_i. The two are orthogonal in the same basis exactly where "
+            "K_i = 1, producing a deterministic error there and none elsewhere. The "
+            "error indicator is therefore a copy of the key:"
+        )
+        st.latex(r"\mathrm{MCC}(E, K) \to +1 \quad\text{(forgery)}")
+        st.latex(r"\mathrm{MCC}(E, K) \to 0 \quad\text{(impersonation)}")
+
+    st.header("Statistical Resolution Limit")
+    res_n = minimum_trials_for_resolution(1.0 / 3.0, 0.5)
+    st.latex(
+        r"n \ge \frac{9\left(q_a(1-q_a) + q_b(1-q_b)\right)}{(q_a - q_b)^2}"
+    )
+    st.markdown(
+        f"The tightest pair is intercept-resend (1/3) against impersonation (1/2), "
+        f"requiring **n >= {res_n}** at 3 sigma. This is why classification is reliable "
+        f"at the full n = 256 and unreliable on small subsets — the classifier reports a "
+        f"resolution warning and scales confidence down when the sample is too small."
+    )
+
+    st.header("Live Classification")
+    clf_attack = st.selectbox(
+        "Attack scenario to classify",
+        options=[
+            "No Attack / Baseline",
+            "Channel Tampering",
+            "Signature Forgery",
+            "Impersonation",
+            "Quantum Interception",
+            "Replay Attack",
+        ],
+    )
+    clf_params: Dict[str, Any] = {}
+    if clf_attack == "Channel Tampering":
+        clf_params["p_attack"] = st.slider(
+            "Channel tampering probability p", 0.0, 1.0, 0.50, 0.05
+        )
+    elif clf_attack == "Quantum Interception":
+        clf_params["strategy"] = "uniform_random"
+    elif clf_attack == "Replay Attack":
+        clf_params["target_message"] = st.text_input(
+            "Message Bob is verifying", value=f"{message}_modified"
+        )
+
+    if st.button("RUN AND CLASSIFY", type="primary"):
+        with st.spinner("Executing circuits and profiling measurement statistics..."):
+            clf_res = _run_and_cache(clf_attack, clf_params)
+
+        _render_decision_banner(clf_res.decision)
+        st.markdown("---")
+        _render_classification_block(clf_res.classification)
+
+
+# =============================================================================
+#  SECTION 9: SECURITY BOUNDS (FORGERY PROBABILITY & DETECTION POWER)
+# =============================================================================
+elif nav_section == "Security Bounds":
+    st.title("SECURITY ANALYSIS — FORGERY BOUNDS & DETECTION POWER")
+    st.caption(
+        "Exact closed-form binomial quantities. Nothing here is simulated or estimated."
+    )
+
+    st.header("Forgery Probability")
+    st.markdown(
+        "An adversary without the secret key has no information about "
+        "b_i = d_i XOR K_i, because for a uniformly random K each b_i is uniform and "
+        "independent of the digest. The best available strategy is a coin flip at every "
+        "position. A signature is accepted when at most t = floor(s_a * n) positions "
+        "disagree, so:"
+    )
+    st.latex(
+        r"P_{\mathrm{forge}}(n, s_a) = "
+        r"\sum_{j=0}^{\lfloor s_a n \rfloor} \binom{n}{j} \left(\frac{1}{2}\right)^{n}"
+    )
+    st.markdown(
+        "This bound is **information-theoretic**: it holds against an adversary with "
+        "unbounded computational power, including a quantum computer, because the "
+        "adversary lacks information about K rather than facing a hard computation. "
+        "Shor's algorithm has nothing to attack."
+    )
+
+    bound_col1, bound_col2 = st.columns(2)
+    with bound_col1:
+        s_a_input = st.slider(
+            "Acceptance threshold s_a", 0.0, 0.25,
+            float(round(decision_thresholds.s_accept, 3)), 0.005,
+        )
+    with bound_col2:
+        key_density = sum(shared_key) / len(shared_key)
+        st.metric("Active key 1-bit density", f"{key_density:.4f}")
+
+    curve = forgery_bound_curve(
+        [8, 16, 32, 64, 128, 256, 512], acceptance_threshold=s_a_input
+    )
+    st.dataframe(
+        [
+            {
+                "n": c.signature_length,
+                "Max tolerated errors t": c.max_tolerated_errors,
+                "P_forge": f"{c.forgery_probability:.4e}",
+                "Security (bits)": (
+                    "inf" if math.isinf(c.security_bits) else f"{c.security_bits:.1f}"
+                ),
+            }
+            for c in curve
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    fig_fb, ax_fb = plt.subplots(figsize=(8, 4))
+    finite = [c for c in curve if not math.isinf(c.security_bits)]
+    ax_fb.plot(
+        [c.signature_length for c in finite],
+        [c.security_bits for c in finite],
+        marker="o", color=T["accent"], linewidth=2,
+    )
+    ax_fb.set_xlabel("Signature length n")
+    ax_fb.set_ylabel("Security level (bits)")
+    ax_fb.set_title("Forgery resistance grows linearly in bits (exponentially in probability)")
+    ax_fb.grid(True, alpha=0.3, linestyle="--", color=T["grid"])
+    _apply_plot_theme(fig_fb, ax_fb)
+    fig_fb.tight_layout()
+    st.pyplot(fig_fb)
+    plt.close(fig_fb)
+
+    at_256 = forgery_success_probability(256, s_a_input)
+    st.success(f"At n = 256: {at_256.interpretation}")
+
+    if key_density < 0.4 or key_density > 0.6:
+        st.error(
+            f"KEY WARNING: the active key has 1-bit density {key_density:.4f}, not ~0.5. "
+            f"The bound above assumes a uniformly random key. A digest-only forger "
+            f"succeeds per-position with probability 1 - density = "
+            f"{1 - key_density:.4f}, so the real bound is weaker than shown."
+        )
+
+    st.header("Detection Power")
+    st.markdown(
+        "Power is the probability the exact binomial detector flags an attack of true "
+        "error rate q, given the critical count k* set by alpha:"
+    )
+    st.latex(r"k^{*} = \min\{k : \Pr[K \ge k \mid n, p_0] < \alpha\}")
+    st.latex(r"\mathrm{Power} = \Pr[K \ge k^{*} \mid n, q], \qquad "
+             r"\mathrm{Size} = \Pr[K \ge k^{*} \mid n, p_0]")
+
+    summary_rows = attack_detection_summary(256, baseline_noise, alpha)
+    st.dataframe(
+        [
+            {
+                "Attack": row["attack"],
+                "Analytic error rate q": f"{row['analytic_error_rate']:.4f}",
+                "Critical count k*": row["critical_errors"],
+                "Detection power": f"{row['detection_probability']:.6f}",
+                "False-positive rate": f"{row['false_positive_rate']:.4e}",
+            }
+            for row in summary_rows
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.markdown("**Power versus signature length**")
+    fig_dp, ax_dp = plt.subplots(figsize=(8, 4))
+    ax_dp.set_prop_cycle(color=T["series"])
+    lengths = [8, 16, 32, 64, 128, 256, 512]
+    for label, q in [
+        ("Intercept-resend (q=1/3)", 1.0 / 3.0),
+        ("Forgery / Impersonation (q=1/2)", 0.5),
+        ("Channel tampering p=0.10 (q=0.067)", (2.0 / 3.0) * 0.10),
+    ]:
+        powers = detection_power_curve(lengths, baseline_noise, q, alpha)
+        ax_dp.plot(
+            lengths, [p.detection_probability for p in powers],
+            marker="o", linewidth=2, label=label,
+        )
+    ax_dp.axhline(0.99, linestyle="--", color=T["text_secondary"], alpha=0.7, label="99% power")
+    ax_dp.set_xscale("log", base=2)
+    ax_dp.set_xlabel("Signature length n")
+    ax_dp.set_ylabel("Detection probability")
+    ax_dp.set_ylim(-0.05, 1.05)
+    ax_dp.legend(fontsize=8)
+    ax_dp.grid(True, alpha=0.3, linestyle="--", color=T["grid"])
+    _apply_plot_theme(fig_dp, ax_dp, legend=True)
+    fig_dp.tight_layout()
+    st.pyplot(fig_dp)
+    plt.close(fig_dp)
+
+    st.header("Decision Thresholds In Force")
+    th = decision_thresholds
+    t1, t2, t3 = st.columns(3)
+    t1.metric("s_accept", f"{th.s_accept:.4f}")
+    t2.metric("s_reject", f"{th.s_reject:.4f}")
+    t3.metric("sigma", f"{th.sigma:.6f}")
+    st.caption(th.rationale)
+    st.markdown(
+        "- Error rate **<= s_accept** -> ACCEPT (a noiseless channel gives exactly 0, so "
+        "legitimate signatures are accepted deterministically).\n"
+        "- **Between** the thresholds -> ABORT (evidence too strong for noise, too weak "
+        "to attribute).\n"
+        "- **>= s_reject** -> REJECT."
+    )
+    st.warning(
+        "Honest limitation: channel tampering is a continuum at (2/3)p errors. At "
+        "p = 0.10 it lands in ABORT, and below the calibrated noise floor it is "
+        "information-theoretically indistinguishable from noise. No attack is ever "
+        "ACCEPTED except a bit-flip weaker than that floor, which forges nothing."
+    )
+
+
+# =============================================================================
+#  SECTION 10: PERFORMANCE & COMPLEXITY
+# =============================================================================
+elif nav_section == "Performance":
+    st.title("PERFORMANCE & COMPUTATIONAL COMPLEXITY")
+    st.caption(
+        "Measured, not asserted. Wall-clock timings vary by machine; the scaling "
+        "exponent is the reproducible quantity."
+    )
+
+    st.header("Analytic Complexity")
+    st.dataframe(
+        [
+            {"Stage": row["stage"], "Complexity": row["complexity"], "Note": row["note"]}
+            for row in build_complexity_table()
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.header("Empirical Scaling")
+    st.markdown(
+        "If duration T scales as T = c * n^k then log T = log c + k log n, so a "
+        "least-squares fit of log T against log n recovers the exponent k directly. "
+        "k ~ 1 confirms O(n)."
+    )
+    st.latex(r"\log T = \log c + k \log n")
+
+    perf_col1, perf_col2 = st.columns(2)
+    with perf_col1:
+        perf_sizes = st.multiselect(
+            "Signature lengths to time",
+            options=[8, 16, 32, 64, 128, 256],
+            default=[16, 32, 64, 128],
+        )
+    with perf_col2:
+        perf_repeats = st.slider("Timed repetitions per size (minimum kept)", 1, 5, 3)
+
+    st.caption(
+        "Methodology: one untimed warm-up pass, then the minimum of N timed runs. Timing "
+        "noise is strictly additive, so the fastest run is the closest estimate of true "
+        "cost. A single measurement per size can distort the fitted slope by 50% or more."
+    )
+
+    if st.button("RUN PERFORMANCE BENCHMARK", type="primary"):
+        if len(perf_sizes) < 2:
+            st.error("Select at least two signature lengths to fit a scaling exponent.")
+        else:
+            with st.spinner("Benchmarking..."):
+                analysis = analyze_verification_complexity(
+                    message=message,
+                    shared_key=shared_key,
+                    sizes=sorted(perf_sizes),
+                    session=active_session,
+                    backend=active_backend_adapter,
+                    seed=seed,
+                    repeats=int(perf_repeats),
+                )
+                enc_metrics = measure_encoding_performance(
+                    message=message, shared_key=shared_key, repetitions=200,
+                    session=active_session,
+                )
+
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Fitted exponent k", f"{analysis.log_log_slope:.3f}")
+            p2.metric("Fit quality R^2", f"{analysis.r_squared:.4f}")
+            p3.metric("Per-position cost", f"{analysis.per_qubit_seconds * 1000:.2f} ms")
+
+            if "O(n) linear" in analysis.classification:
+                st.success(f"CONFIRMED: {analysis.classification}")
+            else:
+                st.warning(
+                    f"Measured {analysis.classification}. Expected O(n); a deviation "
+                    f"usually indicates timing interference rather than a protocol change."
+                )
+
+            st.dataframe(
+                [
+                    {
+                        "n": size,
+                        "Duration (s)": f"{dur:.4f}",
+                        "Per position (ms)": f"{dur / size * 1000:.3f}",
+                    }
+                    for size, dur in zip(analysis.sizes, analysis.durations)
+                ],
+                width="stretch",
+                hide_index=True,
+            )
+
+            fig_pf, (ax_lin, ax_log) = plt.subplots(1, 2, figsize=(11, 4))
+            ax_lin.plot(analysis.sizes, analysis.durations, marker="o",
+                        color=T["series"][0], linewidth=2)
+            ax_lin.set_xlabel("Signature length n")
+            ax_lin.set_ylabel("Duration (s)")
+            ax_lin.set_title("Linear scale")
+            ax_lin.grid(True, alpha=0.3, linestyle="--", color=T["grid"])
+
+            ax_log.loglog(analysis.sizes, analysis.durations, marker="o",
+                          color=T["series"][0], linewidth=2, label="measured")
+            ref = [analysis.durations[0] * (s / analysis.sizes[0]) for s in analysis.sizes]
+            ax_log.loglog(analysis.sizes, ref, linestyle="--", color=T["text_secondary"],
+                          label="ideal O(n)")
+            ax_log.set_xlabel("log n")
+            ax_log.set_ylabel("log T")
+            ax_log.set_title(f"Log-log fit: k = {analysis.log_log_slope:.3f}")
+            ax_log.legend(fontsize=8)
+            ax_log.grid(True, alpha=0.3, which="both", linestyle="--", color=T["grid"])
+            _apply_plot_theme(fig_pf, ax_lin, ax_log, legend=True)
+            fig_pf.tight_layout()
+            st.pyplot(fig_pf)
+            plt.close(fig_pf)
+
+            st.header("Classical vs Quantum Cost")
+            st.markdown(
+                f"The classical stage (hash, XOR, basis schedule) costs "
+                f"**{enc_metrics.seconds_per_qubit * 1e6:.2f} microseconds** per position, "
+                f"against **{analysis.per_qubit_seconds * 1000:.2f} milliseconds** for "
+                f"circuit execution — roughly "
+                f"{analysis.per_qubit_seconds / max(enc_metrics.seconds_per_qubit, 1e-12):.0f}x "
+                f"cheaper. The constant factor is dominated by simulator overhead, not by "
+                f"protocol arithmetic."
+            )
+
+    st.header("Measurement Disclosures")
+    st.markdown(
+        "- Wall-clock timings characterise this host and this simulator; they are "
+        "reproducible in order of magnitude, not to the millisecond.\n"
+        "- Simulator measurements do **not** predict physical QPU runtime, where queue "
+        "latency dominates and is outside the protocol's control.\n"
+        "- The freshness and authorization checks add O(1) work and are invisible at "
+        "this resolution."
+    )
+
+
+# =============================================================================
+#  SECTION 11: SECURITY EVENT AUDIT LOG
+# =============================================================================
+elif nav_section == "Audit Log":
+    st.title("SECURITY EVENT AUDIT LOG")
+    st.caption(
+        "Append-only JSON Lines record of every verification, threat detection, "
+        "authorization denial, and key-establishment run."
+    )
+
+    summary = audit_logger.summary()
+
+    a1, a2, a3 = st.columns(3)
+    a1.metric("Total events", summary["total_events"])
+    a2.metric("Critical", summary["by_severity"].get("CRITICAL", 0))
+    a3.metric("Informational", summary["by_severity"].get("INFO", 0))
+
+    st.caption(f"Log file: {summary['log_path']}")
+    if not audit_enabled:
+        st.warning("Logging is currently disabled in the sidebar; no new events are written.")
+
+    if summary["total_events"] == 0:
+        st.info(
+            "No events recorded yet. Run an experiment in the Security Lab, Threat "
+            "Classification, or Key Distribution section to populate the log."
+        )
+    else:
+        st.markdown("**Event breakdown by type**")
+        st.dataframe(
+            [{"Event Type": k, "Count": v} for k, v in sorted(summary["by_type"].items())],
+            width="stretch",
+            hide_index=True,
+        )
+
+        st.header("Event Stream")
+        filter_col1, filter_col2 = st.columns(2)
+        with filter_col1:
+            sev_filter = st.multiselect(
+                "Severity", options=["INFO", "WARNING", "CRITICAL"],
+                default=["INFO", "WARNING", "CRITICAL"],
+            )
+        with filter_col2:
+            max_rows = st.slider("Maximum rows", 10, 500, 100, 10)
+
+        events = [
+            e for e in audit_logger.read_events(limit=int(max_rows))
+            if e.severity in sev_filter
+        ]
+
+        st.dataframe(
+            [
+                {
+                    "Timestamp (UTC)": e.timestamp,
+                    "Event": e.event_type,
+                    "Severity": e.severity,
+                    "Verdict": e.verdict or "-",
+                    "Digest": e.message_digest_prefix or "-",
+                    "Attack": e.detail.get("attack_name", "-"),
+                    "Classified As": e.detail.get("classified_as") or "-",
+                    "Error Rate": (
+                        f"{e.detail['observed_error_rate']:.4f}"
+                        if isinstance(e.detail.get("observed_error_rate"), (int, float))
+                        else "-"
+                    ),
+                    "p-value": (
+                        f"{e.detail['p_value']:.3e}"
+                        if isinstance(e.detail.get("p_value"), (int, float))
+                        else "-"
+                    ),
+                }
+                for e in reversed(events)
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+        with st.expander("Inspect a single event payload"):
+            if events:
+                chosen = st.selectbox(
+                    "Event",
+                    options=list(range(len(events))),
+                    format_func=lambda i: f"{events[i].timestamp} — {events[i].event_type}",
+                )
+                st.json({
+                    "event_id": events[chosen].event_id,
+                    "timestamp": events[chosen].timestamp,
+                    "event_type": events[chosen].event_type,
+                    "severity": events[chosen].severity,
+                    "verdict": events[chosen].verdict,
+                    "message_digest_prefix": events[chosen].message_digest_prefix,
+                    "detail": events[chosen].detail,
+                })
+
+        export_col1, export_col2 = st.columns(2)
+        with export_col1:
+            st.download_button(
+                "Download Audit Log (JSON)",
+                data=audit_logger.export_json(),
+                file_name="qds_security_events.json",
+                mime="application/json",
+            )
+        with export_col2:
+            if st.button("Clear Audit Log"):
+                audit_logger.clear()
+                st.rerun()
+
+    st.header("Secret Hygiene")
+    st.markdown(
+        "Key material is **never** written to the log. Only non-invertible derived "
+        "quantities are recorded: the key's 1-bit density, a 16-character digest prefix, "
+        "and the nonce (a public protocol value needed for replay forensics). Fields "
+        "matching known-sensitive names are replaced with `[REDACTED]` as defence in "
+        "depth, so the log is safe to export."
+    )
+    st.warning(
+        "The log is tamper-evident only insofar as the host filesystem is trusted. It is "
+        "not cryptographically chained and does not defend against an attacker holding "
+        "write access."
+    )
+
+
+# =============================================================================
+#  SECTION 12: REPRODUCIBILITY
 # =============================================================================
 elif nav_section == "Reproducibility":
     st.title("SCIENTIFIC DISCLOSURES & REPRODUCIBILITY")
@@ -2873,12 +4344,19 @@ elif nav_section == "Reproducibility":
         "message_M": message,
         "sha256_digest_bits": 256,
         "shared_key_mode": key_mode,
+        "shared_key_provenance": key_provenance,
         "shared_key_1_density": sum(shared_key) / 256,
         "random_seed": seed,
         "shots_per_qubit": shots_per_qubit,
         "baseline_error_rate_p0": baseline_noise,
         "significance_threshold_alpha": alpha,
         "execution_backend": execution_backend_mode,
+        "freshness_binding_enabled": freshness_enabled,
+        "audit_logging_enabled": audit_enabled,
+        "decision_threshold_s_accept": round(decision_thresholds.s_accept, 6),
+        "decision_threshold_s_reject": round(decision_thresholds.s_reject, 6),
+        "decision_threshold_sigma": round(decision_thresholds.sigma, 8),
+        "seed_derivation": "ShotSeeder (RNG-drawn per-shot seeds, not consecutive integers)",
     }
     st.json(config_dict)
 
