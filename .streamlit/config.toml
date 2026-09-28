@@ -1,8 +1,10 @@
 [theme]
-primaryColor = "#EC4899"
-backgroundColor = "#08040F"
-secondaryBackgroundColor = "#130825"
-textColor = "#F3E8FF"
+# Clean, academic light theme. The in-app "Appearance" control in the sidebar
+# layers a dark palette over this via CSS custom properties.
+primaryColor = "#4361EE"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F1F3F5"
+textColor = "#212529"
 font = "sans serif"
 
 [server]

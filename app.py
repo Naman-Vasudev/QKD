@@ -147,17 +147,21 @@ LIGHT_THEME = {
     "border": "#DEE2E6",
     "border_strong": "#CED4DA",
     "text_primary": "#212529",
-    "text_secondary": "#6C757D",
+    # Semantic colours are a shade darker than the usual Tailwind-600 values so
+    # that body-size text clears WCAG AA (4.5:1) on BOTH the white and the grey
+    # surface. The lighter variants measured 2.9-3.8:1, which is large-text only.
+    "text_secondary": "#5F666D",
     "accent": "#4361EE",
     "accent_bg": "rgba(67, 97, 238, 0.08)",
-    "success": "#059669",
-    "success_bg": "rgba(5, 150, 105, 0.09)",
-    "danger": "#DC2626",
-    "danger_bg": "rgba(220, 38, 38, 0.08)",
-    "warning": "#D97706",
-    "warning_bg": "rgba(217, 119, 6, 0.10)",
-    "series": ["#4361EE", "#D97706", "#059669", "#7048E8", "#0891B2", "#BE123C"],
+    "success": "#047857",
+    "success_bg": "rgba(4, 120, 87, 0.09)",
+    "danger": "#C5221F",
+    "danger_bg": "rgba(197, 34, 31, 0.08)",
+    "warning": "#B45309",
+    "warning_bg": "rgba(180, 83, 9, 0.10)",
+    "series": ["#4361EE", "#B45309", "#047857", "#6D28D9", "#0E7490", "#9F1239"],
     "grid": "#ADB5BD",
+    "bitmap_cmap": "binary",
 }
 
 DARK_THEME = {
@@ -179,6 +183,7 @@ DARK_THEME = {
     "warning_bg": "rgba(251, 191, 36, 0.14)",
     "series": ["#60A5FA", "#FBBF24", "#34D399", "#A78BFA", "#22D3EE", "#FB7185"],
     "grid": "#475569",
+    "bitmap_cmap": "gray",
 }
 
 T = DARK_THEME if IS_DARK else LIGHT_THEME
@@ -214,212 +219,338 @@ def _apply_plot_theme(fig, *axes, legend: bool = False):
                 text.set_color(T["text_primary"])
     return fig
 
-# ─── CSS: Purplish-Pinkish Cyber-Quantum Design System ────────────────────────
-css_style_content = """
+# ─── CSS: clean academic design system ────────────────────────────────────────
+# Navigation groups. The index is the 1-based position of the first navigation
+# option in that group; headings are rendered as non-interactive ::before /
+# ::after content sitting in the label's top margin, so the radio widget itself
+# keeps exactly the option list the routing depends on.
+NAV_GROUPS = [
+    (1, "GETTING STARTED", "Concepts and protocol walkthrough"),
+    (3, "KEY MANAGEMENT", "Establish the shared secret key"),
+    (4, "EXPERIMENTS", "Run circuits on simulators and hardware"),
+    (6, "SECURITY TESTING", "Attack the protocol, identify the threat"),
+    (8, "ANALYSIS & RESULTS", "Statistics, bounds and scaling"),
+    (11, "AUDIT & COMPLIANCE", "Event trail and reproducibility"),
+]
+
+_nav_group_rules = "".join(
+    f"""
+    .st-key-qds_nav div[role="radiogroup"] > label:nth-of-type({idx}) {{
+        margin-top: 36px !important;
+    }}
+    .st-key-qds_nav div[role="radiogroup"] > label:nth-of-type({idx})::before {{
+        content: "{name}";
+        top: -31px;
+    }}
+    .st-key-qds_nav div[role="radiogroup"] > label:nth-of-type({idx})::after {{
+        content: "{desc}";
+        top: -16px;
+    }}
+    """
+    for idx, name, desc in NAV_GROUPS
+)
+
+# Surface overrides needed only in dark mode, because config.toml ships the
+# light palette as the Streamlit-native default.
+_dark_overrides = f"""
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"],
+    [data-testid="stMainBlockContainer"], .main {{
+        background-color: {T["bg_primary"]} !important;
+        color: {T["text_primary"]} !important;
+    }}
+    [data-testid="stHeader"] {{
+        background-color: {T["bg_primary"]} !important;
+    }}
+    [data-testid="stSidebarContent"] {{
+        background-color: {T["bg_secondary"]} !important;
+    }}
+    [data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] li, [data-testid="stText"],
+    .stCaption, [data-testid="stCaptionContainer"] {{
+        color: {T["text_primary"]} !important;
+    }}
+    [data-testid="stDataFrame"], [data-testid="stTable"], .stDataFrame {{
+        background-color: {T["bg_elevated"]} !important;
+        color: {T["text_primary"]} !important;
+    }}
+    [data-testid="stExpander"] details {{
+        background-color: {T["bg_elevated"]} !important;
+        border: 1px solid {T["border"]} !important;
+    }}
+    [data-baseweb="select"] > div, [data-baseweb="input"] > div,
+    [data-baseweb="textarea"] > div {{
+        background-color: {T["bg_elevated"]} !important;
+        border-color: {T["border"]} !important;
+        color: {T["text_primary"]} !important;
+    }}
+    [data-baseweb="popover"] li, [data-baseweb="menu"] li {{
+        background-color: {T["bg_elevated"]} !important;
+        color: {T["text_primary"]} !important;
+    }}
+    code, pre, [data-testid="stCode"] {{
+        background-color: {T["bg_code"]} !important;
+        color: {T["text_primary"]} !important;
+    }}
+""" if IS_DARK else ""
+
+css_style_content = f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
 
-    section[data-testid="stSidebar"] {
-        background-color: rgba(17, 7, 34, 0.94) !important;
-        backdrop-filter: blur(12px) !important;
-        -webkit-backdrop-filter: blur(12px) !important;
-        border-right: 1px solid rgba(236, 72, 153, 0.25) !important;
-    }
-    section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {
-        color: #F472B6 !important;
-        font-family: 'Outfit', sans-serif !important;
-    }
+    :root {{
+        --bg-primary: {T["bg_primary"]};
+        --bg-secondary: {T["bg_secondary"]};
+        --bg-elevated: {T["bg_elevated"]};
+        --border: {T["border"]};
+        --border-strong: {T["border_strong"]};
+        --text-primary: {T["text_primary"]};
+        --text-secondary: {T["text_secondary"]};
+        --accent-primary: {T["accent"]};
+        --accent-primary-bg: {T["accent_bg"]};
+        --color-success: {T["success"]};
+        --color-success-bg: {T["success_bg"]};
+        --color-danger: {T["danger"]};
+        --color-danger-bg: {T["danger_bg"]};
+        --color-warning: {T["warning"]};
+        --color-warning-bg: {T["warning_bg"]};
+    }}
 
-    h1 {
-        font-family: 'Outfit', sans-serif !important;
-        font-size: 2.1rem !important;
-        font-weight: 800 !important;
-        background: linear-gradient(135deg, #FF60B5 0%, #EC4899 40%, #C084FC 80%, #818CF8 100%);
-        -webkit-background-clip: text !important;
-        -webkit-text-fill-color: transparent !important;
-        border-bottom: 2px solid transparent !important;
-        border-image: linear-gradient(90deg, #EC4899, #A855F7, transparent) 1 !important;
-        padding-bottom: 8px !important;
-        margin-bottom: 12px !important;
-        letter-spacing: -0.02em !important;
-        text-shadow: 0 0 25px rgba(236, 72, 153, 0.25);
-    }
+    html, body, .stApp {{
+        font-family: 'Inter', sans-serif;
+    }}
 
-    h2 {
-        font-family: 'Outfit', sans-serif !important;
-        font-size: 1.45rem !important;
+    {_dark_overrides}
+
+    section[data-testid="stSidebar"] {{
+        background-color: var(--bg-secondary) !important;
+        border-right: 1px solid var(--border) !important;
+    }}
+    section[data-testid="stSidebar"] h2 {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 1.0rem !important;
         font-weight: 700 !important;
-        color: #E9D5FF !important;
-        border-bottom: 1px solid rgba(236, 72, 153, 0.25) !important;
+        color: var(--text-primary) !important;
+        letter-spacing: 0.01em !important;
+        border-bottom: none !important;
+        margin-bottom: 0 !important;
+        padding-bottom: 0 !important;
+    }}
+    section[data-testid="stSidebar"] h3 {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.80rem !important;
+        font-weight: 600 !important;
+        color: var(--text-secondary) !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.07em !important;
+        margin-top: 1.1em !important;
+    }}
+
+    h1 {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 1.85rem !important;
+        font-weight: 700 !important;
+        color: var(--text-primary) !important;
+        letter-spacing: -0.01em !important;
+        padding-bottom: 10px !important;
+        margin-bottom: 14px !important;
+        border-bottom: 1px solid var(--border) !important;
+    }}
+    h2 {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 1.32rem !important;
+        font-weight: 600 !important;
+        color: var(--text-primary) !important;
+        border-bottom: 1px solid var(--border) !important;
         padding-bottom: 6px !important;
         margin-top: 1.6em !important;
-    }
-
-    h3 {
-        font-family: 'Outfit', sans-serif !important;
-        font-size: 1.15rem !important;
+    }}
+    h3 {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 1.08rem !important;
         font-weight: 600 !important;
-        color: #C084FC !important;
+        color: var(--text-primary) !important;
         margin-top: 1.2em !important;
-    }
+    }}
 
-    .status-normal {
-        border-left: 4px solid #10B981;
-        background: linear-gradient(90deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.03));
-        padding: 12px 18px;
-        border-radius: 0 8px 8px 0;
+    .status-normal {{
+        border-left: 3px solid var(--color-success);
+        background: var(--color-success-bg);
+        padding: 12px 16px;
+        border-radius: 0 6px 6px 0;
         font-family: 'JetBrains Mono', monospace;
-        font-size: 0.90rem;
-        font-weight: 600;
-        color: #34D399;
-        margin: 10px 0;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
-    }
-
-    .status-threat {
-        border-left: 4px solid #FF2A85;
-        background: linear-gradient(90deg, rgba(255, 42, 133, 0.20), rgba(255, 42, 133, 0.04));
-        padding: 12px 18px;
-        border-radius: 0 8px 8px 0;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.90rem;
-        font-weight: 600;
-        color: #FF60B5;
-        margin: 10px 0;
-        box-shadow: 0 4px 15px rgba(255, 42, 133, 0.15);
-    }
-
-    .info-box {
-        border-left: 4px solid #A855F7;
-        background: linear-gradient(90deg, rgba(168, 85, 247, 0.15), rgba(168, 85, 247, 0.03));
-        padding: 12px 18px;
-        border-radius: 0 8px 8px 0;
         font-size: 0.88rem;
-        color: #E9D5FF;
-        margin: 10px 0;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
-    }
+        font-weight: 500;
+        color: var(--color-success);
+        margin: 8px 0;
+    }}
 
-    .math-block {
-        background-color: #120722;
-        border: 1px solid rgba(236, 72, 153, 0.3);
-        border-radius: 8px;
+    .status-threat {{
+        border-left: 3px solid var(--color-danger);
+        background: var(--color-danger-bg);
+        padding: 12px 16px;
+        border-radius: 0 6px 6px 0;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.88rem;
+        font-weight: 500;
+        color: var(--color-danger);
+        margin: 8px 0;
+    }}
+
+    .info-box {{
+        border-left: 3px solid var(--accent-primary);
+        background: var(--accent-primary-bg);
+        padding: 12px 16px;
+        border-radius: 0 6px 6px 0;
+        font-size: 0.88rem;
+        color: var(--text-primary);
+        margin: 8px 0;
+    }}
+
+    .math-block {{
+        background-color: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: 6px;
         padding: 14px 18px;
         margin: 12px 0;
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.88rem;
-        color: #F472B6;
-        box-shadow: inset 0 0 15px rgba(236, 72, 153, 0.08);
-    }
+        color: var(--text-primary);
+    }}
 
-    .dataframe-container {
-        border: 1px solid rgba(236, 72, 153, 0.25);
-        border-radius: 8px;
+    .dataframe-container {{
+        border: 1px solid var(--border);
+        border-radius: 6px;
         overflow: hidden;
         margin: 12px 0;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
-    }
+    }}
 
-    pre, code {
+    .security-gap-banner {{
+        border-left: 3px solid var(--color-warning);
+        background: var(--color-warning-bg);
+        padding: 12px 16px;
+        border-radius: 0 6px 6px 0;
+        font-size: 0.88rem;
+        color: var(--text-primary);
+        margin: 10px 0;
+    }}
+
+    pre, code {{
         font-family: 'JetBrains Mono', monospace !important;
-    }
+    }}
 
-    .metric-label {
-        font-size: 0.78rem;
-        color: #C084FC;
-        font-family: 'Outfit', sans-serif;
+    .metric-label {{
+        font-size: 0.76rem;
+        color: var(--text-secondary);
+        font-family: 'Inter', sans-serif;
         text-transform: uppercase;
         letter-spacing: 0.06em;
-    }
+    }}
 
-    .metric-value {
-        font-size: 1.15rem;
+    .metric-value {{
+        font-size: 1.12rem;
         font-family: 'JetBrains Mono', monospace;
         font-weight: 600;
-        color: #FF70A6;
-        text-shadow: 0 0 10px rgba(255, 112, 166, 0.3);
-    }
+        color: var(--text-primary);
+    }}
 
-    .sec-header {
-        font-family: 'Outfit', sans-serif;
-        font-size: 1.10rem;
-        font-weight: 700;
-        color: #FF60B5;
-        background: linear-gradient(90deg, rgba(236, 72, 153, 0.22), rgba(168, 85, 247, 0.08));
-        padding: 8px 16px;
-        border-left: 4px solid #EC4899;
-        border-radius: 0 6px 6px 0;
-        margin-top: 1.4em;
-        margin-bottom: 0.8em;
-        letter-spacing: 0.03em;
-    }
+    .sec-header {{
+        font-family: 'Inter', sans-serif;
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        background: var(--bg-secondary);
+        padding: 10px 16px;
+        border-left: 3px solid var(--accent-primary);
+        border-radius: 0 4px 4px 0;
+        margin-top: 1.2em;
+        margin-bottom: 0.6em;
+    }}
 
-    [data-testid="stMetric"] {
-        background: rgba(22, 10, 42, 0.75) !important;
-        border: 1px solid rgba(236, 72, 153, 0.25) !important;
-        border-radius: 10px !important;
+    [data-testid="stMetric"] {{
+        background: var(--bg-elevated) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 6px !important;
         padding: 12px 16px !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), inset 0 0 15px rgba(236, 72, 153, 0.05) !important;
-    }
-    [data-testid="stMetricLabel"] {
-        font-family: 'Outfit', sans-serif !important;
-        font-size: 0.82rem !important;
-        color: #C084FC !important;
+    }}
+    [data-testid="stMetricLabel"] {{
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.78rem !important;
+        color: var(--text-secondary) !important;
         text-transform: uppercase !important;
         letter-spacing: 0.05em !important;
-    }
-    [data-testid="stMetricValue"] {
+    }}
+    [data-testid="stMetricValue"] {{
         font-family: 'JetBrains Mono', monospace !important;
-        font-size: 1.25rem !important;
-        font-weight: 700 !important;
-        color: #FF70A6 !important;
-        text-shadow: 0 0 10px rgba(255, 112, 166, 0.3) !important;
-    }
+        font-size: 1.20rem !important;
+        font-weight: 600 !important;
+        color: var(--text-primary) !important;
+    }}
 
-    .stButton > button {
-        background: linear-gradient(135deg, #EC4899 0%, #A855F7 100%) !important;
+    .stButton > button {{
+        background: var(--accent-primary) !important;
         color: #FFFFFF !important;
-        font-family: 'Outfit', sans-serif !important;
-        font-weight: 700 !important;
-        border: none !important;
-        border-radius: 8px !important;
-        padding: 10px 24px !important;
-        box-shadow: 0 0 20px rgba(236, 72, 153, 0.4) !important;
-        transition: all 0.25s ease-in-out !important;
-    }
-    .stButton > button:hover {
-        transform: translateY(-2px) scale(1.02) !important;
-        box-shadow: 0 0 30px rgba(236, 72, 153, 0.65) !important;
-    }
+        font-family: 'Inter', sans-serif !important;
+        font-weight: 600 !important;
+        border: 1px solid var(--accent-primary) !important;
+        border-radius: 6px !important;
+        padding: 9px 22px !important;
+    }}
+    .stButton > button:hover {{
+        filter: brightness(0.93) !important;
+    }}
+    .stButton > button:focus-visible {{
+        outline: 2px solid var(--accent-primary) !important;
+        outline-offset: 2px !important;
+    }}
 
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label {
-        background: rgba(26, 12, 46, 0.4) !important;
-        border: 1px solid rgba(236, 72, 153, 0.15) !important;
-        border-radius: 8px !important;
-        padding: 8px 14px !important;
-        margin-bottom: 6px !important;
-        transition: all 0.2s ease-in-out !important;
-        font-family: 'Outfit', sans-serif !important;
+    /* Navigation: flat rows with non-interactive group headings. */
+    div[data-testid="stSidebar"] div[role="radiogroup"] {{
+        gap: 0 !important;
+    }}
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label {{
+        position: relative !important;
+        background: transparent !important;
+        border: 1px solid transparent !important;
+        border-radius: 5px !important;
+        padding: 7px 12px !important;
+        margin-bottom: 2px !important;
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.92rem !important;
         font-weight: 500 !important;
-        letter-spacing: 0.02em !important;
-    }
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
-        background: rgba(236, 72, 153, 0.15) !important;
-        border-color: rgba(236, 72, 153, 0.4) !important;
-        box-shadow: 0 0 12px rgba(236, 72, 153, 0.2) !important;
-    }
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {
-        background: linear-gradient(90deg, rgba(236, 72, 153, 0.25), rgba(168, 85, 247, 0.2)) !important;
-        border-color: #EC4899 !important;
-        box-shadow: 0 0 15px rgba(236, 72, 153, 0.3) !important;
-    }
+        color: var(--text-primary) !important;
+    }}
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {{
+        background: var(--accent-primary-bg) !important;
+    }}
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {{
+        background: var(--accent-primary-bg) !important;
+        border-color: var(--accent-primary) !important;
+        font-weight: 600 !important;
+    }}
+    .st-key-qds_nav div[role="radiogroup"] > label::before,
+    .st-key-qds_nav div[role="radiogroup"] > label::after {{
+        position: absolute;
+        left: 0;
+        pointer-events: none;
+        white-space: nowrap;
+    }}
+    .st-key-qds_nav div[role="radiogroup"] > label::before {{
+        font-size: 0.66rem;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        color: var(--text-primary);
+    }}
+    .st-key-qds_nav div[role="radiogroup"] > label::after {{
+        font-size: 0.66rem;
+        font-style: italic;
+        color: var(--text-secondary);
+    }}
+    {_nav_group_rules}
     </style>
 """
 
-st.markdown(css_style_content + f"<style>{bg_css_override}</style>", unsafe_allow_html=True)
+st.markdown(css_style_content, unsafe_allow_html=True)
 
-# ─── Sidebar: Navigation + Global Configuration ───────────────────────────────
-st.sidebar.markdown("## QUANTUM DIGITAL SIGNATURE\n### Security Laboratory")
 st.sidebar.markdown("---")
 
 nav_section = st.sidebar.radio(
@@ -439,6 +570,7 @@ nav_section = st.sidebar.radio(
         "Reproducibility",
     ],
     label_visibility="collapsed",
+    key="qds_nav",
 )
 
 st.sidebar.markdown("---")
@@ -720,27 +852,24 @@ def _plot_pmf(n: int, p0: float, k_obs: int, alpha_val: float) -> plt.Figure:
             break
 
     fig, ax = plt.subplots(figsize=(7, 3))
-    fig.patch.set_facecolor('#130825')
-    ax.set_facecolor('#0B0414')
-    ax.plot(x_vals, pmf_vals, color="#C084FC", linewidth=1.8, marker="o", markersize=4,
+    ax.plot(x_vals, pmf_vals, color=T["accent"], linewidth=1.8, marker="o", markersize=4,
             label=f"Binomial PMF (n={n}, p0={p0})")
-    ax.fill_between(x_vals, pmf_vals, alpha=0.25, color="#A855F7")
+    ax.fill_between(x_vals, pmf_vals, alpha=0.18, color=T["accent"])
 
     if k_crit is not None and k_crit <= x_max:
         reject_x = x_vals[x_vals >= k_crit]
         ax.fill_between(reject_x, binom.pmf(reject_x, n, p0),
-                        alpha=0.45, color="#FF2A85", label=f"Rejection Region (alpha={alpha_val})")
+                        alpha=0.35, color=T["danger"], label=f"Rejection Region (alpha={alpha_val})")
 
-    ax.axvline(k_obs, color="#FF2A85", linestyle="--", linewidth=1.8,
+    ax.axvline(k_obs, color=T["danger"], linestyle="--", linewidth=1.8,
                label=f"Observed k = {k_obs}")
-    ax.set_xlabel("Number of Verification Errors (k)", color="#E9D5FF")
-    ax.set_ylabel("Probability Mass P(K = k | n, p0)", color="#E9D5FF")
-    ax.set_title("Exact Binomial Error Distribution under Null Hypothesis H0: p = p0", color="#FF70A6", fontsize=10, fontweight="bold")
-    ax.grid(True, linestyle="--", alpha=0.2, color="#A855F7")
-    ax.tick_params(colors="#C084FC")
-    for spine in ax.spines.values():
-        spine.set_color((236/255, 72/255, 153/255, 0.3))
-    ax.legend(fontsize=8, facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF")
+    ax.set_xlabel("Number of Verification Errors (k)")
+    ax.set_ylabel("Probability Mass P(K = k | n, p0)")
+    ax.set_title("Exact Binomial Error Distribution under Null Hypothesis H0: p = p0",
+                 fontsize=10, fontweight="bold")
+    ax.grid(True, linestyle="--", alpha=0.3, color=T["grid"])
+    ax.legend(fontsize=8)
+    _apply_plot_theme(fig, ax, legend=True)
     fig.tight_layout()
     return fig
 
@@ -799,7 +928,7 @@ def _render_measurement_and_stochasticity_block(
     res: ExperimentResult,
     theo_exp_str: str,
 ):
-    st.markdown('<div class="sec-header">G. MEASUREMENT RESULTS</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">F. MEASUREMENT RESULTS</div>', unsafe_allow_html=True)
 
     theo_val = res.theoretical_expectation if isinstance(res.theoretical_expectation, float) else None
     obs_val = res.observed_error_rate
@@ -822,7 +951,7 @@ def _render_measurement_and_stochasticity_block(
 
 
 def _render_position_trace_table_and_map(detailed_results: List[Dict[str, Any]], attack_type: str):
-    st.markdown('<div class="sec-header">E. POSITION-BY-POSITION EXPERIMENTAL TRACE</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">H. POSITION-BY-POSITION EXPERIMENTAL TRACE</div>', unsafe_allow_html=True)
 
     if not detailed_results:
         st.write("No detailed per-qubit results recorded.")
@@ -845,13 +974,12 @@ def _render_position_trace_table_and_map(detailed_results: List[Dict[str, Any]],
     if len(grid_outcomes) == 256:
         grid_2d = grid_outcomes.reshape(16, 16)
         fig_map, ax_map = plt.subplots(figsize=(4, 4))
-        fig_map.patch.set_facecolor('#130825')
-        ax_map.set_facecolor('#0B0414')
-        cmap = matplotlib.colors.ListedColormap(["#FF2A85", "#10B981"])
+        cmap = matplotlib.colors.ListedColormap([T["danger"], T["success"]])
         ax_map.imshow(grid_2d, cmap=cmap, vmin=0, vmax=1, interpolation="nearest", aspect="equal")
-        ax_map.set_title("256-Qubit Outcome Map (Green=MATCH, Red=MISMATCH)", fontsize=8, color="#F3E8FF")
+        ax_map.set_title("256-Position Outcome Map (Green=MATCH, Red=MISMATCH)", fontsize=8)
         ax_map.set_xticks([])
         ax_map.set_yticks([])
+        _apply_plot_theme(fig_map, ax_map)
         st.pyplot(fig_map)
         plt.close(fig_map)
 
@@ -937,13 +1065,13 @@ if nav_section == "Overview":
         """
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 20px 0;">
           <!-- Stage 1 -->
-          <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(236, 72, 153, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
+          <div style="background: var(--bg-elevated); border: 1px solid rgba(236, 72, 153, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-              <span style="background: linear-gradient(135deg, #EC4899, #A855F7); color: #FFF; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">STAGE 1</span>
-              <span style="color: #C084FC; font-size: 0.80rem; font-weight: 600; font-family: 'JetBrains Mono', monospace;">CLASSICAL DOMAIN</span>
+              <span style="background: var(--accent-primary); color: #FFF; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">STAGE 1</span>
+              <span style="color: var(--text-secondary); font-size: 0.80rem; font-weight: 600; font-family: 'JetBrains Mono', monospace;">CLASSICAL DOMAIN</span>
             </div>
-            <h4 style="color: #F472B6; font-family: 'Outfit', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Classical Preprocessing</h4>
-            <div style="font-size: 0.86rem; color: #E9D5FF; line-height: 1.6;">
+            <h4 style="color: var(--accent-primary); font-family: 'Inter', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Classical Preprocessing</h4>
+            <div style="font-size: 0.86rem; color: var(--text-primary); line-height: 1.6;">
               <p style="margin: 6px 0;"><strong>Step 1: Hash Generation</strong><br>Message <code>M</code> &rarr; <code>D = SHA-256(M)</code> (256 bits)</p>
               <p style="margin: 6px 0;"><strong>Step 2: XOR Key Encoding</strong><br><code>b<sub>i</sub> = d<sub>i</sub> &oplus; K<sub>i</sub></code> for <code>i &in; 0..255</code></p>
               <p style="margin: 6px 0;"><strong>Step 3: Basis Schedule</strong><br><code>i mod 3 = 0 &rarr; Z</code> | <code>1 &rarr; X</code> | <code>2 &rarr; Y</code></p>
@@ -951,27 +1079,27 @@ if nav_section == "Overview":
           </div>
 
           <!-- Stage 2 -->
-          <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
+          <div style="background: var(--bg-elevated); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-              <span style="background: linear-gradient(135deg, #A855F7, #6366F1); color: #FFF; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">STAGE 2</span>
-              <span style="color: #A855F7; font-size: 0.80rem; font-weight: 600; font-family: 'JetBrains Mono', monospace;">QUANTUM CHANNEL</span>
+              <span style="background: var(--accent-primary); color: #FFF; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">STAGE 2</span>
+              <span style="color: var(--accent-primary); font-size: 0.80rem; font-weight: 600; font-family: 'JetBrains Mono', monospace;">QUANTUM CHANNEL</span>
             </div>
-            <h4 style="color: #C084FC; font-family: 'Outfit', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Quantum Transmission</h4>
-            <div style="font-size: 0.86rem; color: #E9D5FF; line-height: 1.6;">
+            <h4 style="color: var(--text-secondary); font-family: 'Inter', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Quantum Transmission</h4>
+            <div style="font-size: 0.86rem; color: var(--text-primary); line-height: 1.6;">
               <p style="margin: 6px 0;"><strong>Step 4: State Preparation</strong><br>Prepare <code>|&psi;<sub>i</sub>&rang;</code> Pauli eigenstate from <code>(b<sub>i</sub>, Basis<sub>i</sub>)</code></p>
               <p style="margin: 6px 0;"><strong>Step 5: 3-Qubit Teleportation</strong><br>Bell measurement <code>(c0, c1)</code> + Feedforward <code>X<sup>c1</sup>Z<sup>c0</sup></code></p>
-              <p style="margin: 6px 0; color: #FF70A6;"><strong>[Adversarial Insertion Point]</strong><br>Eve operates between Alice & Bob</p>
+              <p style="margin: 6px 0; color: var(--accent-primary);"><strong>[Adversarial Insertion Point]</strong><br>Eve operates between Alice & Bob</p>
             </div>
           </div>
 
           <!-- Stage 3 -->
-          <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
+          <div style="background: var(--bg-elevated); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 12px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.4);">
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
               <span style="background: linear-gradient(135deg, #10B981, #059669); color: #FFF; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">STAGE 3</span>
               <span style="color: #34D399; font-size: 0.80rem; font-weight: 600; font-family: 'JetBrains Mono', monospace;">VERIFICATION</span>
             </div>
-            <h4 style="color: #34D399; font-family: 'Outfit', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Statistical Detection</h4>
-            <div style="font-size: 0.86rem; color: #E9D5FF; line-height: 1.6;">
+            <h4 style="color: #34D399; font-family: 'Inter', sans-serif; margin: 0 0 10px 0; font-size: 1.1rem;">Statistical Detection</h4>
+            <div style="font-size: 0.86rem; color: var(--text-primary); line-height: 1.6;">
               <p style="margin: 6px 0;"><strong>Step 6: Qubit Readout</strong><br>Bob measures <code>q2</code> in basis <code>Basis<sub>i</sub></code></p>
               <p style="margin: 6px 0;"><strong>Step 7: Mismatch Error Count</strong><br>Count positions <code>k</code> where outcome &ne; expected</p>
               <p style="margin: 6px 0;"><strong>Step 8: Binomial Test</strong><br>Calculate <code>p = P(K &ge; k | n, p<sub>0</sub>)</code> vs <code>&alpha;</code></p>
@@ -1223,7 +1351,7 @@ if nav_section == "Overview":
   <!-- ═══ LABEL ROW ════════════════════════════════════════════════ -->
   <div class="labels-row">
     <div class="actor-label label-alice">
-      ⬡ ALICE<br/><span style="font-size:0.62rem;font-weight:400;color:#C084FC;">SIGNER</span>
+      ALICE<br/><span style="font-size:0.62rem;font-weight:400;color:#C084FC;">SIGNER</span>
     </div>
     <div class="label-center">
       ─── QUANTUM CHANNEL (Qiskit Aer / 3-Qubit Teleportation) ───
@@ -1235,7 +1363,7 @@ if nav_section == "Overview":
       ─── CHANNEL CONTINUATION ───
     </div>
     <div class="actor-label label-bob">
-      ⬡ BOB<br/><span style="font-size:0.62rem;font-weight:400;color:#6EE7B7;">VERIFIER</span>
+      BOB<br/><span style="font-size:0.62rem;font-weight:400;color:#6EE7B7;">VERIFIER</span>
     </div>
   </div>
 
@@ -1497,7 +1625,7 @@ if nav_section == "Overview":
   <!-- ═══ DECISION OUTCOME ════════════════════════════════════════ -->
   <div class="decision-row">
     <div class="decision-box dec-accept">
-      <span class="dec-icon">✓</span>
+      <span class="dec-icon">●</span>
       <div>
         <div>p-value &gt; α</div>
         <div style="font-size:0.65rem;font-weight:400;letter-spacing:0.02em;margin-top:1px;">
@@ -1506,7 +1634,7 @@ if nav_section == "Overview":
       </div>
     </div>
     <div class="decision-box dec-reject">
-      <span class="dec-icon">⚠</span>
+      <span class="dec-icon">▲</span>
       <div>
         <div>p-value ≤ α</div>
         <div style="font-size:0.65rem;font-weight:400;letter-spacing:0.02em;margin-top:1px;">
@@ -1525,22 +1653,22 @@ if nav_section == "Overview":
   </div>
   <div class="timeline">
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">MSG<br/>Input</div>
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">SHA-256<br/>Hash</div>
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">State<br/>Prepare</div>
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">Transmit<br/>(Bell)</div>
     </div>
     <div class="tl-connector"></div>
@@ -1550,17 +1678,17 @@ if nav_section == "Overview":
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">Bob<br/>Measure</div>
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">Binomial<br/>Verify</div>
     </div>
     <div class="tl-connector"></div>
     <div class="tl-stage">
-      <div class="tl-dot tl-dot-done">✓</div>
+      <div class="tl-dot tl-dot-done">●</div>
       <div class="tl-label">Security<br/>Decision</div>
     </div>
   </div>
@@ -1631,6 +1759,61 @@ function toggleAttack(active) {
 </body>
 </html>
 """
+        # The component renders inside an iframe and therefore cannot inherit the
+        # page's CSS custom properties, so the active theme is substituted into the
+        # markup directly. Three actors stay visually distinct: signer = accent,
+        # adversary = warning, verifier = success.
+        _actor = {"alice": T["accent"], "eve": T["warning"], "bob": T["success"]}
+
+        def _rgb(hex_colour: str) -> str:
+            """Return "r, g, b" for a #rrggbb string."""
+            h = hex_colour.lstrip("#")
+            return ", ".join(str(int(h[i:i + 2], 16)) for i in (0, 2, 4))
+
+        # Drop the glow treatments before any colour substitution runs.
+        for _glow in (
+            "box-shadow: 0 0 12px rgba(16,185,129,0.15);",
+            "box-shadow: 0 0 12px rgba(239,68,68,0.12);",
+            'filter="url(#f-alice)"',
+            'filter="url(#f-eve)"',
+            'filter="url(#f-bob)"',
+        ):
+            _protocol_html = _protocol_html.replace(_glow, "")
+
+        for _old, _new in (
+            ("#080410", T["bg_elevated"]),
+            ("#E9D5FF", T["text_primary"]),
+            ("#F472B6", _actor["alice"]), ("#EC4899", _actor["alice"]),
+            ("#F9A8D4", _actor["alice"]), ("#C084FC", _actor["alice"]),
+            ("#D8B4FE", _actor["alice"]), ("#A855F7", _actor["alice"]),
+            ("#FBBF24", _actor["eve"]), ("#FDE68A", _actor["eve"]),
+            ("#D97706", _actor["eve"]),
+            ("#34D399", _actor["bob"]), ("#6EE7B7", _actor["bob"]),
+            ("#A7F3D0", _actor["bob"]),
+            ("#F87171", T["danger"]),
+            ("#6366F1", T["series"][3]), ("#818CF8", T["series"][3]),
+            ("#A5B4FC", T["series"][3]),
+            ("#7DD3FC", T["series"][4]), ("#38BDF8", T["series"][4]),
+            ("#6B7280", T["text_secondary"]), ("#9CA3AF", T["text_secondary"]),
+            ("#4B5563", T["border"]),
+        ):
+            _protocol_html = _protocol_html.replace(_old, _new)
+
+        _rgba_map = {
+            "236,72,153": _actor["alice"], "168,85,247": _actor["alice"],
+            "251,191,36": _actor["eve"],
+            "52,211,153": _actor["bob"], "16,185,129": _actor["bob"],
+            "239,68,68": T["danger"],
+            "99,102,241": T["series"][3], "56,189,248": T["series"][4],
+            "75,85,99": T["border"], "100,100,130": T["border"],
+        }
+        for _alpha in ("0.07", "0.08", "0.10", "0.12", "0.15", "0.18",
+                       "0.2", "0.25", "0.35", "0.4", "0.55"):
+            for _triplet, _target in _rgba_map.items():
+                _protocol_html = _protocol_html.replace(
+                    f"rgba({_triplet},{_alpha})", f"rgba({_rgb(_target)},{_alpha})"
+                )
+
         _stc.html(_protocol_html, height=900, scrolling=False)
 
 
@@ -1876,11 +2059,11 @@ elif nav_section == "Protocol":
             """
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin: 20px 0;">
               <!-- Alice Card -->
-              <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(236, 72, 153, 0.35); border-radius: 10px; padding: 18px;">
-                <div style="color: #F472B6; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(236, 72, 153, 0.2); padding-bottom: 6px;">
+              <div style="background: var(--bg-elevated); border: 1px solid rgba(236, 72, 153, 0.35); border-radius: 10px; padding: 18px;">
+                <div style="color: var(--accent-primary); font-family: 'Inter', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(236, 72, 153, 0.2); padding-bottom: 6px;">
                   ALICE (Classical Signer)
                 </div>
-                <div style="font-size: 0.85rem; color: #E9D5FF; line-height: 1.6;">
+                <div style="font-size: 0.85rem; color: var(--text-primary); line-height: 1.6;">
                   • <strong>Message M</strong> &rarr; <code>SHA-256(M)</code> = 256-bit Digest <code>D</code><br>
                   • <strong>Secret Key K</strong> &rarr; Compute <code>b<sub>i</sub> = d<sub>i</sub> &oplus; K<sub>i</sub></code><br>
                   • <strong>Basis Schedule</strong> &rarr; <code>Z</code> (0), <code>X</code> (1), <code>Y</code> (2)<br>
@@ -1889,24 +2072,24 @@ elif nav_section == "Protocol":
               </div>
 
               <!-- Channel Card -->
-              <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 10px; padding: 18px;">
-                <div style="color: #C084FC; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(168, 85, 247, 0.2); padding-bottom: 6px;">
+              <div style="background: var(--bg-elevated); border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 10px; padding: 18px;">
+                <div style="color: var(--text-secondary); font-family: 'Inter', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(168, 85, 247, 0.2); padding-bottom: 6px;">
                   QUANTUM CHANNEL &amp; EVE
                 </div>
-                <div style="font-size: 0.85rem; color: #E9D5FF; line-height: 1.6;">
+                <div style="font-size: 0.85rem; color: var(--text-primary); line-height: 1.6;">
                   • <code>q0</code>: Alice Signature Qubit<br>
                   • <code>(q1, q2)</code>: EPR Bell Pair (<code>H(q1) + CNOT(q1&rarr;q2)</code>)<br>
                   • <strong>Bell Measurement</strong>: <code>CNOT(q0&rarr;q1) + H(q0)</code> &rarr; <code>c0, c1</code><br>
-                  • <span style="color: #FF70A6;"><strong>[ATTACK POINT]</strong> Eve operates between transmission &amp; readout</span>
+                  • <span style="color: var(--accent-primary);"><strong>[ATTACK POINT]</strong> Eve operates between transmission &amp; readout</span>
                 </div>
               </div>
 
               <!-- Bob Card -->
-              <div style="background: rgba(22, 10, 42, 0.85); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 10px; padding: 18px;">
-                <div style="color: #34D399; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2); padding-bottom: 6px;">
+              <div style="background: var(--bg-elevated); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 10px; padding: 18px;">
+                <div style="color: #34D399; font-family: 'Inter', sans-serif; font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2); padding-bottom: 6px;">
                   BOB (Classical Verifier)
                 </div>
-                <div style="font-size: 0.85rem; color: #E9D5FF; line-height: 1.6;">
+                <div style="font-size: 0.85rem; color: var(--text-primary); line-height: 1.6;">
                   • <strong>Corrections</strong>: Apply <code>X(q2)</code> if <code>c1=1</code>, <code>Z(q2)</code> if <code>c0=1</code><br>
                   • <strong>Readout</strong>: Rotate <code>q2</code> to <code>Basis<sub>i</sub></code> &amp; measure <code>c2</code><br>
                   • <strong>Mismatch Check</strong>: Compare outcome to expected eigenvalue<br>
@@ -1916,25 +2099,25 @@ elif nav_section == "Protocol":
             </div>
 
             <div style="margin-top: 20px;">
-              <h4 style="color: #FF70A6; font-family: 'Outfit', sans-serif; margin-bottom: 10px;">Pauli Eigenstate Encoding Table</h4>
+              <h4 style="color: var(--accent-primary); font-family: 'Inter', sans-serif; margin-bottom: 10px;">Pauli Eigenstate Encoding Table</h4>
               <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;">
                 <div style="background: rgba(16, 7, 32, 0.8); border: 1px solid rgba(236, 72, 153, 0.25); border-radius: 8px; padding: 12px;">
-                  <strong style="color: #F472B6;">Basis Z (i mod 3 = 0)</strong><br>
-                  <span style="font-size: 0.84rem; color: #E9D5FF;">
+                  <strong style="color: var(--accent-primary);">Basis Z (i mod 3 = 0)</strong><br>
+                  <span style="font-size: 0.84rem; color: var(--text-primary);">
                     b=0 &rarr; <code>|0&rang; = [1, 0]^T</code> (+1)<br>
                     b=1 &rarr; <code>|1&rang; = [0, 1]^T</code> (-1)
                   </span>
                 </div>
                 <div style="background: rgba(16, 7, 32, 0.8); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 12px;">
                   <strong style="color: #38BDF8;">Basis X (i mod 3 = 1)</strong><br>
-                  <span style="font-size: 0.84rem; color: #E9D5FF;">
+                  <span style="font-size: 0.84rem; color: var(--text-primary);">
                     b=0 &rarr; <code>|+&rang; = 1/&radic;2 [1, 1]^T</code> (+1)<br>
                     b=1 &rarr; <code>|-&rang; = 1/&radic;2 [1, -1]^T</code> (-1)
                   </span>
                 </div>
                 <div style="background: rgba(16, 7, 32, 0.8); border: 1px solid rgba(192, 132, 252, 0.25); border-radius: 8px; padding: 12px;">
-                  <strong style="color: #C084FC;">Basis Y (i mod 3 = 2)</strong><br>
-                  <span style="font-size: 0.84rem; color: #E9D5FF;">
+                  <strong style="color: var(--text-secondary);">Basis Y (i mod 3 = 2)</strong><br>
+                  <span style="font-size: 0.84rem; color: var(--text-primary);">
                     b=0 &rarr; <code>|+i&rang; = 1/&radic;2 [1, i]^T</code> (+1)<br>
                     b=1 &rarr; <code>|-i&rang; = 1/&radic;2 [1, -i]^T</code> (-1)
                   </span>
@@ -1990,10 +2173,11 @@ elif nav_section == "Protocol":
         )
         grid = np.array(digest_bits).reshape(16, 16)
         fig_bm, ax_bm = plt.subplots(figsize=(3.5, 3.5))
-        ax_bm.imshow(grid, cmap="binary", vmin=0, vmax=1, interpolation="nearest", aspect="equal")
+        ax_bm.imshow(grid, cmap=T["bitmap_cmap"], vmin=0, vmax=1, interpolation="nearest", aspect="equal")
         ax_bm.set_title(f"SHA-256 Digest Bitmap: M = \"{message}\"", fontsize=9)
         ax_bm.set_xticks([])
         ax_bm.set_yticks([])
+        _apply_plot_theme(fig_bm, ax_bm)
         st.pyplot(fig_bm)
         plt.close(fig_bm)
 
@@ -2155,17 +2339,14 @@ elif nav_section == "Quantum Lab":
             values = list(counts.values())
 
             fig_h, ax_h = plt.subplots(figsize=(max(4, len(labels) * 0.8 + 2), 3))
-            fig_h.patch.set_facecolor('#130825')
-            ax_h.set_facecolor('#0B0414')
-            ax_h.bar(range(len(labels)), values, color="#EC4899", width=0.5, edgecolor="#FF70A6")
+            ax_h.bar(range(len(labels)), values, color=T["accent"], width=0.5)
             ax_h.set_xticks(range(len(labels)))
-            ax_h.set_xticklabels(labels, fontfamily="monospace", fontsize=8, color="#F3E8FF")
-            ax_h.set_ylabel("Count", color="#E9D5FF")
-            ax_h.set_title(f"AerSimulator Outcome Distribution (N = {total_shots} shots)", color="#FF70A6", fontsize=9, fontweight="bold")
-            ax_h.grid(True, axis="y", linestyle="--", alpha=0.2, color="#A855F7")
-            ax_h.tick_params(colors="#C084FC")
-            for spine in ax_h.spines.values():
-                spine.set_color((236/255, 72/255, 153/255, 0.3))
+            ax_h.set_xticklabels(labels, fontfamily="monospace", fontsize=8)
+            ax_h.set_ylabel("Count")
+            ax_h.set_title(f"AerSimulator Outcome Distribution (N = {total_shots} shots)",
+                           fontsize=9, fontweight="bold")
+            ax_h.grid(True, axis="y", linestyle="--", alpha=0.3, color=T["grid"])
+            _apply_plot_theme(fig_h, ax_h)
             fig_h.tight_layout()
             st.pyplot(fig_h)
             plt.close(fig_h)
@@ -2266,11 +2447,12 @@ elif nav_section == "Quantum Lab":
         st.markdown("The 256 encoded bits b_i visualized as a 16x16 pixel grid. Black = 1, White = 0.")
         encoded_bits_arr = np.array([eq.encoded_bit for eq in encoded_qubits]).reshape(16, 16)
         fig_eb, ax_eb = plt.subplots(figsize=(3.5, 3.5))
-        ax_eb.imshow(encoded_bits_arr, cmap="binary", vmin=0, vmax=1,
+        ax_eb.imshow(encoded_bits_arr, cmap=T["bitmap_cmap"], vmin=0, vmax=1,
                      interpolation="nearest", aspect="equal")
         ax_eb.set_title("Encoded Bits b_i (b_i = d_i XOR K_i)", fontsize=9)
         ax_eb.set_xticks([])
         ax_eb.set_yticks([])
+        _apply_plot_theme(fig_eb, ax_eb)
         st.pyplot(fig_eb)
         plt.close(fig_eb)
 
@@ -2585,8 +2767,6 @@ elif nav_section == "Hardware Validation":
 
         # Side-by-side Matplotlib chart comparison
         fig_hw_bar, ax_hw_bar = plt.subplots(figsize=(8.5, 3.8))
-        fig_hw_bar.patch.set_facecolor("#110722")
-        ax_hw_bar.set_facecolor("#0A0414")
 
         all_outcomes = sorted(list(set(list(ideal_counts.keys()) + list(hw_counts.keys()))))
         x_indices = np.arange(len(all_outcomes))
@@ -2597,18 +2777,19 @@ elif nav_section == "Hardware Validation":
         hw_pcts = [(hw_counts.get(out, 0) / hw_tot) * 100.0 for out in all_outcomes]
 
         target_label = f"Target ({res['hardware_backend']})"
-        ax_hw_bar.bar(x_indices - bar_width/2, ideal_pcts, width=bar_width, label="Noiseless Aer Simulation (Ideal)", color="#EC4899", alpha=0.88)
-        ax_hw_bar.bar(x_indices + bar_width/2, hw_pcts, width=bar_width, label=target_label, color="#38BDF8", alpha=0.88)
+        ax_hw_bar.bar(x_indices - bar_width/2, ideal_pcts, width=bar_width,
+                      label="Noiseless Aer Simulation (Ideal)", color=T["series"][0])
+        ax_hw_bar.bar(x_indices + bar_width/2, hw_pcts, width=bar_width,
+                      label=target_label, color=T["series"][1])
 
         ax_hw_bar.set_xticks(x_indices)
-        ax_hw_bar.set_xticklabels([f"|{out}⟩" for out in all_outcomes], color="#E9D5FF", fontsize=9)
-        ax_hw_bar.set_ylabel("Readout Probability (%)", color="#E9D5FF", fontsize=9)
-        ax_hw_bar.set_title(f"Quantum Teleportation Measurement Distribution (|ψᵢ⟩ = {hw_state}, Basis = {hw_basis})", color="#FF70A6", fontsize=10, fontweight="bold")
-        ax_hw_bar.tick_params(colors="#C084FC")
-        ax_hw_bar.grid(True, linestyle="--", alpha=0.2, color="#A855F7")
-        for spine in ax_hw_bar.spines.values():
-            spine.set_color((0.925, 0.282, 0.6, 0.35))
-        ax_hw_bar.legend(facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF", fontsize=8.5)
+        ax_hw_bar.set_xticklabels([f"|{out}⟩" for out in all_outcomes], fontsize=9)
+        ax_hw_bar.set_ylabel("Readout Probability (%)", fontsize=9)
+        ax_hw_bar.set_title(f"Quantum Teleportation Measurement Distribution (|ψᵢ⟩ = {hw_state}, Basis = {hw_basis})",
+                            fontsize=10, fontweight="bold")
+        ax_hw_bar.grid(True, linestyle="--", alpha=0.3, color=T["grid"])
+        ax_hw_bar.legend(fontsize=8.5)
+        _apply_plot_theme(fig_hw_bar, ax_hw_bar, legend=True)
         fig_hw_bar.tight_layout()
         st.pyplot(fig_hw_bar)
         plt.close(fig_hw_bar)
@@ -2722,7 +2903,7 @@ elif nav_section == "Security Lab":
             res: ExperimentResult = st.session_state.ch_result
 
             # Section F: Circuit Comparison
-            st.markdown('<div class="sec-header">F. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">E. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
             st.markdown(
                 "Modified operation: Injected Pauli-X gate on q2 with probability $p_{\\text{atk}}$ before Bob's basis readout."
             )
@@ -2744,7 +2925,7 @@ elif nav_section == "Security Lab":
             _render_measurement_and_stochasticity_block(res, theo_exp_str=f"{(2.0/3.0)*p_att:.4f}")
 
             # Section H: Theoretical vs Observed
-            st.markdown('<div class="sec-header">H. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">G. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
             tot_x = res.relevant_params.get("total_x_injected", "N/A")
             st.markdown(
                 f"- **Injected Bit-Flips (X applied)**: `{tot_x}` / {res.total_trials} positions\n"
@@ -2818,7 +2999,7 @@ elif nav_section == "Security Lab":
             res: ExperimentResult = st.session_state.forg_result
 
             # Section F: Circuit Difference
-            st.markdown('<div class="sec-header">F. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">E. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
             st.markdown(
                 "Modified operation: Alice's state preparation uses $b'_i = d_i$ instead of $b_i = d_i \\oplus K_i$."
             )
@@ -2827,7 +3008,7 @@ elif nav_section == "Security Lab":
             _render_measurement_and_stochasticity_block(res, theo_exp_str=f"{theo_forgery:.4f}")
 
             # Section H: Theoretical vs Observed
-            st.markdown('<div class="sec-header">H. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">G. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
             st.markdown(
                 f"- **Secret Key K 1-Density**: `{key_ones}/256 = {theo_forgery:.4f}`\n"
                 f"- **Expected Mismatch Rate**: `{theo_forgery:.4f}`\n"
@@ -2889,7 +3070,7 @@ elif nav_section == "Security Lab":
             res: ExperimentResult = st.session_state.imp_result
 
             # Section F: Circuit Difference
-            st.markdown('<div class="sec-header">F. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">E. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
             st.markdown(
                 "Modified operation: Alice state preparation uses random Bernoulli(0.5) guesses $b'_i$."
             )
@@ -2898,7 +3079,7 @@ elif nav_section == "Security Lab":
             _render_measurement_and_stochasticity_block(res, theo_exp_str="0.5000 (50%)")
 
             # Section H: Theoretical vs Observed
-            st.markdown('<div class="sec-header">H. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">G. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
             st.markdown(
                 f"- **Theoretical Expectation**: 0.5000 (50% error rate)\n"
                 f"- **Observed Verification Error Rate**: `{res.observed_error_rate:.4f}` ({res.num_errors} errors)\n"
@@ -2967,7 +3148,7 @@ elif nav_section == "Security Lab":
             res: ExperimentResult = st.session_state.int_result
 
             # Section F: Circuit Comparison
-            st.markdown('<div class="sec-header">F. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">E. QUANTUM CIRCUIT / CIRCUIT DIFFERENCE</div>', unsafe_allow_html=True)
             st.markdown(
                 "Modified operation: Injected Eve basis measurement, qc.reset(0), and conditional re-preparation on q0."
             )
@@ -2990,7 +3171,7 @@ elif nav_section == "Security Lab":
             _render_measurement_and_stochasticity_block(res, theo_exp_str="0.3333 (~33.3%)")
 
             # Section H: Theoretical vs Observed
-            st.markdown('<div class="sec-header">H. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">G. THEORETICAL EXPECTATION VS OBSERVATION</div>', unsafe_allow_html=True)
             same_cnt = res.relevant_params.get("same_basis_trials", "N/A")
             diff_cnt = res.relevant_params.get("diff_basis_trials", "N/A")
             st.markdown(
@@ -3074,7 +3255,7 @@ elif nav_section == "Security Lab":
                 diff_mask = (grid_orig != grid_tgt).astype(float)
 
                 fig_bmp, axes = plt.subplots(1, 3, figsize=(8, 3))
-                axes[0].imshow(grid_orig, cmap="binary", vmin=0, vmax=1, aspect="equal")
+                axes[0].imshow(grid_orig, cmap=T["bitmap_cmap"], vmin=0, vmax=1, aspect="equal")
                 axes[0].set_title(f"SHA-256(\"{message}\")", fontsize=8)
                 axes[0].set_xticks([]); axes[0].set_yticks([])
 
@@ -3086,10 +3267,11 @@ elif nav_section == "Security Lab":
                 axes[1].set_title(f"Differences ({hd} bits)", fontsize=8)
                 axes[1].set_xticks([]); axes[1].set_yticks([])
 
-                axes[2].imshow(grid_tgt, cmap="binary", vmin=0, vmax=1, aspect="equal")
+                axes[2].imshow(grid_tgt, cmap=T["bitmap_cmap"], vmin=0, vmax=1, aspect="equal")
                 axes[2].set_title(f"SHA-256(\"{target_msg}\")", fontsize=8)
                 axes[2].set_xticks([]); axes[2].set_yticks([])
 
+                _apply_plot_theme(fig_bmp, *axes)
                 fig_bmp.tight_layout()
                 st.pyplot(fig_bmp)
                 plt.close(fig_bmp)
@@ -3385,24 +3567,20 @@ elif nav_section == "Analysis":
             y_obs = [d["observed_error_rate"] for d in y_data]
 
             fig_bw, axes_bw = plt.subplots(1, 3, figsize=(13, 4), sharey=True)
-            fig_bw.patch.set_facecolor('#130825')
             for ax_, obs_, label_, color_ in zip(
                 axes_bw,
                 [z_obs, x_obs, y_obs],
                 ["Z Basis (Sensitive)", "X Basis (Invariant)", "Y Basis (Sensitive)"],
-                ["#FF2A85", "#38BDF8", "#C084FC"],
+                [T["series"][0], T["series"][1], T["series"][2]],
             ):
-                ax_.set_facecolor('#0B0414')
                 ax_.plot(ps, obs_, "o-", color=color_, linewidth=2, markersize=6, label="Observed")
-                ax_.set_xlabel(r"$p_{\mathrm{atk}}$", color="#E9D5FF")
-                ax_.set_title(label_, fontsize=10, color="#FF70A6", fontweight="bold")
-                ax_.grid(True, linestyle="--", alpha=0.2, color="#A855F7")
-                ax_.tick_params(colors="#C084FC")
-                for spine in ax_.spines.values():
-                    spine.set_color((236/255, 72/255, 153/255, 0.3))
-                ax_.legend(fontsize=8, facecolor="#180B30", edgecolor="#EC4899", labelcolor="#F3E8FF")
+                ax_.set_xlabel(r"$p_{\mathrm{atk}}$")
+                ax_.set_title(label_, fontsize=10, fontweight="bold")
+                ax_.grid(True, linestyle="--", alpha=0.3, color=T["grid"])
+                ax_.legend(fontsize=8)
 
-            axes_bw[0].set_ylabel("Verification Error Rate", color="#E9D5FF")
+            axes_bw[0].set_ylabel("Verification Error Rate")
+            _apply_plot_theme(fig_bw, *axes_bw, legend=True)
             fig_bw.tight_layout()
             st.pyplot(fig_bw)
             plt.close(fig_bw)
@@ -3795,12 +3973,14 @@ elif nav_section == "Security Bounds":
     ax_fb.plot(
         [c.signature_length for c in finite],
         [c.security_bits for c in finite],
-        marker="o", color="#EC4899", linewidth=2,
+        marker="o", color=T["accent"], linewidth=2,
     )
     ax_fb.set_xlabel("Signature length n")
     ax_fb.set_ylabel("Security level (bits)")
     ax_fb.set_title("Forgery resistance grows linearly in bits (exponentially in probability)")
-    ax_fb.grid(True, alpha=0.3)
+    ax_fb.grid(True, alpha=0.3, linestyle="--", color=T["grid"])
+    _apply_plot_theme(fig_fb, ax_fb)
+    fig_fb.tight_layout()
     st.pyplot(fig_fb)
     plt.close(fig_fb)
 
@@ -3842,6 +4022,7 @@ elif nav_section == "Security Bounds":
 
     st.markdown("**Power versus signature length**")
     fig_dp, ax_dp = plt.subplots(figsize=(8, 4))
+    ax_dp.set_prop_cycle(color=T["series"])
     lengths = [8, 16, 32, 64, 128, 256, 512]
     for label, q in [
         ("Intercept-resend (q=1/3)", 1.0 / 3.0),
@@ -3853,13 +4034,15 @@ elif nav_section == "Security Bounds":
             lengths, [p.detection_probability for p in powers],
             marker="o", linewidth=2, label=label,
         )
-    ax_dp.axhline(0.99, linestyle="--", color="gray", alpha=0.6, label="99% power")
+    ax_dp.axhline(0.99, linestyle="--", color=T["text_secondary"], alpha=0.7, label="99% power")
     ax_dp.set_xscale("log", base=2)
     ax_dp.set_xlabel("Signature length n")
     ax_dp.set_ylabel("Detection probability")
     ax_dp.set_ylim(-0.05, 1.05)
     ax_dp.legend(fontsize=8)
-    ax_dp.grid(True, alpha=0.3)
+    ax_dp.grid(True, alpha=0.3, linestyle="--", color=T["grid"])
+    _apply_plot_theme(fig_dp, ax_dp, legend=True)
+    fig_dp.tight_layout()
     st.pyplot(fig_dp)
     plt.close(fig_dp)
 
@@ -3976,22 +4159,24 @@ elif nav_section == "Performance":
 
             fig_pf, (ax_lin, ax_log) = plt.subplots(1, 2, figsize=(11, 4))
             ax_lin.plot(analysis.sizes, analysis.durations, marker="o",
-                        color="#EC4899", linewidth=2)
+                        color=T["series"][0], linewidth=2)
             ax_lin.set_xlabel("Signature length n")
             ax_lin.set_ylabel("Duration (s)")
             ax_lin.set_title("Linear scale")
-            ax_lin.grid(True, alpha=0.3)
+            ax_lin.grid(True, alpha=0.3, linestyle="--", color=T["grid"])
 
             ax_log.loglog(analysis.sizes, analysis.durations, marker="o",
-                          color="#A855F7", linewidth=2, label="measured")
+                          color=T["series"][0], linewidth=2, label="measured")
             ref = [analysis.durations[0] * (s / analysis.sizes[0]) for s in analysis.sizes]
-            ax_log.loglog(analysis.sizes, ref, linestyle="--", color="gray",
+            ax_log.loglog(analysis.sizes, ref, linestyle="--", color=T["text_secondary"],
                           label="ideal O(n)")
             ax_log.set_xlabel("log n")
             ax_log.set_ylabel("log T")
             ax_log.set_title(f"Log-log fit: k = {analysis.log_log_slope:.3f}")
             ax_log.legend(fontsize=8)
-            ax_log.grid(True, alpha=0.3, which="both")
+            ax_log.grid(True, alpha=0.3, which="both", linestyle="--", color=T["grid"])
+            _apply_plot_theme(fig_pf, ax_lin, ax_log, legend=True)
+            fig_pf.tight_layout()
             st.pyplot(fig_pf)
             plt.close(fig_pf)
 
