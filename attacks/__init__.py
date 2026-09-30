@@ -2,7 +2,9 @@
 Cyber Threat Attack Simulation Package for Quantum Digital Signatures.
 
 Provides physical quantum channel tampering (bit-flip noise injection),
-signature forgery, impersonation, and quantum interception (intercept-resend) attack simulations.
+signature forgery, impersonation, quantum interception (intercept-resend),
+replay attack (nonce-aware, same-message and different-message variants),
+and unauthorized verification attempt simulations.
 """
 
 from .channel import (

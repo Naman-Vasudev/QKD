@@ -292,6 +292,9 @@ def detection_power_curve(
 
 
 # Analytic error rates produced by each modelled attack, used for power comparisons.
+# Same-message replay (nonce reuse) and unauthorized verification are detected
+# deterministically by classical checks (nonce registry and HMAC validation) before
+# any quantum measurement occurs, so they do not have a statistical error rate.
 ATTACK_ERROR_RATES: Dict[str, float] = {
     "Channel Tampering (p=0.10)": (2.0 / 3.0) * 0.10,
     "Channel Tampering (p=0.50)": (2.0 / 3.0) * 0.50,

@@ -3727,8 +3727,8 @@ elif nav_section == "Analysis":
     else:
         st.header("Integrated Attack Comparison")
 
-        if st.button("RUN ALL 6 ATTACK SCENARIOS", type="primary"):
-            with st.spinner("Executing 6-scenario comparative evaluation..."):
+        if st.button("RUN ALL ATTACK SCENARIOS", type="primary"):
+            with st.spinner("Executing comparative evaluation..."):
                 comp_results = run_security_comparison(
                     message=message,
                     shared_key=shared_key,
@@ -3773,6 +3773,7 @@ elif nav_section == "Analysis":
                     "What Eve Knows": "Nothing",
                     "What Eve Controls": "None",
                     "What Bob Observes": "Legitimate channel noise ~ p0",
+                    "Nonce / Binding": "Session bound (baseline reference)",
                     "Why Detection Works": "Error rate <= p0; fails to reject H0",
                 },
                 {
@@ -3780,6 +3781,7 @@ elif nav_section == "Analysis":
                     "What Eve Knows": "None",
                     "What Eve Controls": "Pauli-X error probability pₐₜₖ on q2",
                     "What Bob Observes": "Z/Y basis errors ~ pₐₜₖ; X invariant",
+                    "Nonce / Binding": "N/A (physical channel attack)",
                     "Why Detection Works": "Net error rate (2/3)pₐₜₖ exceeds p₀",
                 },
                 {
@@ -3787,6 +3789,7 @@ elif nav_section == "Analysis":
                     "What Eve Knows": "Message M, SHA-256 Digest D",
                     "What Eve Controls": "Forged states prepared assuming K=0",
                     "What Bob Observes": "Errors at positions where Kᵢ = 1",
+                    "Nonce / Binding": "Nonce unknown to forger",
                     "Why Detection Works": "Key 1-density (~50%) causes large error rate",
                 },
                 {
@@ -3794,6 +3797,7 @@ elif nav_section == "Analysis":
                     "What Eve Knows": "None",
                     "What Eve Controls": "Random Bernoulli(0.5) state guesses",
                     "What Bob Observes": "50% verification error rate",
+                    "Nonce / Binding": "Nonce unknown to impersonator",
                     "Why Detection Works": "Random guesses fail 50% of the time",
                 },
                 {
@@ -3801,14 +3805,32 @@ elif nav_section == "Analysis":
                     "What Eve Knows": "None",
                     "What Eve Controls": "Intercepts q0, measures, resends eigenstate",
                     "What Bob Observes": "33.3% error rate from basis collapse",
+                    "Nonce / Binding": "N/A (intercept before binding check)",
                     "Why Detection Works": "Mismatched basis measurements disturb quantum states",
                 },
                 {
-                    "Attack": "Replay Attack",
-                    "What Eve Knows": "Captured legitimate quantum signature",
-                    "What Eve Controls": "Replays past signature for new session",
-                    "What Bob Observes": "0% error if same message; ~50% if diff message",
-                    "Why Detection Works": "SHA-256 digest Hamming distance causes errors for diff message",
+                    "Attack": "Replay (Different Message)",
+                    "What Eve Knows": "Captured signature for message M'",
+                    "What Eve Controls": "Presents M' signature for message M",
+                    "What Bob Observes": "~50% error from digest Hamming distance",
+                    "Nonce / Binding": "Digest mismatch detected classically",
+                    "Why Detection Works": "SHA-256 avalanche: HD(D,D')/256 ~ 50%",
+                },
+                {
+                    "Attack": "Replay (Same Message)",
+                    "What Eve Knows": "Captured signature + session nonce",
+                    "What Eve Controls": "Replays identical signature verbatim",
+                    "What Bob Observes": "Nonce already consumed; rejected in O(1)",
+                    "Nonce / Binding": "Nonce registry rejects reused nonce",
+                    "Why Detection Works": "Deterministic nonce freshness check before measurement",
+                },
+                {
+                    "Attack": "Unauthorized Verification",
+                    "What Eve Knows": "No valid authorization token",
+                    "What Eve Controls": "No token / forged token / wrong-ID token",
+                    "What Bob Observes": "HMAC mismatch; denied before measurement",
+                    "Nonce / Binding": "N/A (blocked at authorization gate)",
+                    "Why Detection Works": "Constant-time HMAC-SHA256 comparison; deterministic denial",
                 },
             ]
             st.dataframe(qual_data, width="stretch")

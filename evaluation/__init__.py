@@ -1,7 +1,8 @@
 """
 Integrated Security Evaluation Package for Quantum Digital Signatures.
 
-Provides unified experiment orchestration, result normalization, attack comparison,
+Provides unified experiment orchestration, result normalization, multi-attack
+comparison (all 8 scenarios including replay and unauthorized verification),
 and channel tampering sweep evaluation engines for the QDS Security Laboratory.
 """
 

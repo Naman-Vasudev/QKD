@@ -167,6 +167,8 @@ def compute_decision_thresholds(
     - Every attack that attempts to produce a signature without the key -- forgery,
       impersonation, intercept-resend, different-message replay -- yields an error rate
       of at least q_min = 1/3, hence above s_reject, and is always REJECTED.
+      Same-message replay is caught deterministically by the nonce registry before
+      measurement; unauthorized verification is caught by HMAC validation.
     - CHANNEL TAMPERING IS A CONTINUUM AND IS NOT ALWAYS REJECTED. A bit-flip channel of
       strength p produces (2/3)p errors, which can land anywhere:
           p = 0.50 -> 0.333  REJECT
