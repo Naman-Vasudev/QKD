@@ -24,6 +24,8 @@ and h the normalised digest Hamming distance between two messages.
   Digest-only forgery        rho      rho      rho     ~+1             errors track K_i = 1
   Impersonation              1/2      1/2      1/2     ~0              uniform at 1/2
   Replay (different message) h        h        h       ~0              classical digest evidence
+  Replay (same message)      p0       p0       p0      ~0              nonce registry (deterministic)
+  Unauthorized verification  --       --       --      --              HMAC validation (deterministic)
 
 WHY X-BASIS IMMUNITY IDENTIFIES CHANNEL TAMPERING:
 A Pauli-X error maps |+> -> |+> and |-> -> -|->. Both are X eigenstates, so an X-basis

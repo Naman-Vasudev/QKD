@@ -4,7 +4,8 @@ Statistical Cyber Threat Detection Package for Quantum Digital Signatures.
 Provides:
 - Exact non-ML Binomial hypothesis testing for channel anomaly detection (detector).
 - Two-threshold ACCEPT / ABORT / REJECT verification decision rules (detector).
-- Basis-resolved threat classification across all modelled attacks (classifier).
+- Basis-resolved threat classification across all modelled attacks, including replay
+  (nonce freshness) and unauthorized verification (HMAC) overrides (classifier).
 - Information-theoretic forgery probability bounds and detector power (bounds).
 
 NOTE ON THE PACKAGE NAME:
