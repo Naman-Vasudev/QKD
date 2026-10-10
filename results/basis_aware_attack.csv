@@ -1,0 +1,2 @@
+attack,n_qubits,n_repeats,mean_key_leakage_rate,mean_observed_error_rate,detection_rate,ci_lo,ci_hi,p0,alpha
+basis_aware_interception,64,50,1.0,0.0,0.0,0.0,0.07135003417431873,0.02,0.05
