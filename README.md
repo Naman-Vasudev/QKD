@@ -206,7 +206,7 @@ Please reference this repository directly by URL:
 
 ## My Contribution
 
-I designed the evaluation experiments, formulated the threat scenarios and statistical decision criteria, and directed the architecture and implementation, which used AI-assisted coding. This project began as a team submission for Smart India Hackathon 2026 (Problem Statement 5: Quantum-Inspired Cyber Threat Detection for Digital Signature Security; Team Ghost Protocol / EGRESO QUANTA) with three contributors, and was subsequently refined into an open simulation and benchmarking testbed.
+I designed the evaluation experiments, formulated the threat scenarios and statistical decision criteria, and directed the architecture and implementation, which used AI-assisted coding. This project began as a team submission for Smart India Hackathon 2026 (Problem Statement 5: Quantum-Inspired Cyber Threat Detection for Digital Signature Security; Team Ghost Protocol / EGREEN QUANTA) with three contributors, and was subsequently refined into an open simulation and benchmarking testbed.
 
 ---
 
