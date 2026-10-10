@@ -1,0 +1,4 @@
+scenario,mean_error_rate,classically_blocked,measured_detected
+Same-msg (no session),0.0,False,False
+Same-msg (nonce reuse),0.0,True,True
+Diff-msg replay,0.546875,False,1.0

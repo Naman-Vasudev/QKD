@@ -1,497 +1,179 @@
-# Quantum Digital Signature Security Laboratory
+# Quantum Digital Signature (QDS) Simulation and Threat Detection Testbed
 
-A first-of-its-kind interactive security research platform that lets you sign messages using quantum physics and watch adversaries fail to break the protocol.
+This repository provides an open simulation and benchmarking testbed for a teleportation-based Quantum Digital Signature (QDS) scheme, developed in Python with Qiskit and Streamlit. The system models signature generation, quantum teleportation of Pauli eigenstates, exact non-machine-learning statistical anomaly detection, deterministic basis-resolved threat classification, and classical session-nonce freshness binding.
 
-Built for Smart India Hackathon 2026 (SIH2026). Powered by IBM Quantum + Qiskit. Runs in your browser.
+**Central Research Question:**
+*How does hardware noise limit detection in a teleportation-based QDS, and can a session nonce close the same-message replay gap?*
 
----
-
-## What Is This
-
-Imagine you want to send someone a signed document and you need to prove:
-
-1. You actually wrote it (not a hacker pretending to be you).
-2. The document was not tampered with during delivery.
-3. Nobody can reuse your signature on a different document later.
-
-Traditional digital signatures (like those on your bank transactions) rely on mathematical problems that future quantum computers could solve. This lab explores a quantum-powered alternative that uses the fundamental laws of physics, making it theoretically unbreakable even by quantum computers.
-
-This website is a live, interactive laboratory where you can:
-
-- Sign messages using quantum physics.
-- Launch real cyberattacks against the system.
-- Watch whether the system detects and blocks those attacks.
-- Run the actual quantum circuits on real IBM Quantum computers in the cloud.
+> **Note on Origins and Attribution:** This project originated as a team submission for Smart India Hackathon 2026 (Problem Statement 5: Quantum-Inspired Cyber Threat Detection for Digital Signature Security; Team Ghost Protocol / EGRESO QUANTA) and was subsequently expanded into an experimental testbed. Repository: [https://github.com/Naman-Vasudev/QKD.git](https://github.com/Naman-Vasudev/QKD.git).
 
 ---
 
-## The Core Protocol: Quantum Digital Signatures
+## Threat Model and Assumptions
 
-A Quantum Digital Signature (QDS) works like this:
+### Protocol Setup
+1. **Key Establishment:** Alice and Bob share a secret key vector $K \in \{0, 1\}^{256}$, either pre-shared or established via entanglement-based BBM92 Quantum Key Distribution.
+2. **Payload Binding:** The classical message $M$ is bound to a signer identifier, counter, timestamp, and single-use session nonce $N$:
+   $$P = M \parallel \text{signer\_id} \parallel N \parallel \text{counter} \parallel \text{timestamp}$$
+   The bound digest is $D = \text{SHA-256}(P)$.
+3. **State Encoding:** Each digest bit $d_i$ is combined with key bit $K_i$ via $b_i = d_i \oplus K_i$. Bit $b_i$ selects an eigenstate from one of six Pauli states across a deterministic public basis schedule ($i \pmod 3 \in \{Z, X, Y\}$):
+   - $Z$: $|0\rangle$ ($+1$), $|1\rangle$ ($-1$)
+   - $X$: $|+\rangle$ ($+1$), $|-\rangle$ ($-1$)
+   - $Y$: $|+i\rangle$ ($+1$), $|-i\rangle$ ($-1$)
+4. **Transmission:** Alice teleports each state to Bob using sequential 3-qubit teleportation circuits with Bell-state measurements and feedforward Pauli corrections ($X^{c_1} Z^{c_0}$).
+5. **Verification:** Bob measures each received state in Alice's assigned basis. In a noiseless channel with a legitimate signature, measurement eigenvalues match expectations with probability 1.0. Observed error counts are evaluated using exact one-sided Binomial hypothesis testing ($H_0: p = p_0$ vs $H_1: p > p_0$).
 
-1. Your message gets hashed into a 256-bit fingerprint using SHA-256.
-2. Each bit of that fingerprint is encoded into a quantum state (a Pauli eigenstate).
-3. These quantum states are teleported to the receiver using Bell-state entanglement and quantum teleportation.
-4. The receiver measures the quantum states using projective measurements with Pauli corrections.
-5. A statistical test checks whether the received pattern matches what was sent, flagging any anomaly as a potential attack.
+### Adversary Capabilities and Threat Classes
+The adversary Eve sits on the quantum channel between Alice and Bob under an individual-qubit attack model:
+1. **Channel Tampering:** Injects physical bit-flip noise (Pauli-$X$) on the transmission channel with probability $p$.
+2. **Signature Forgery:** Knows message $M$ and digest $D$, but does not know secret key $K$. Attempts state preparation assuming $K = 0$.
+3. **Impersonation:** Randomly guesses encoded states ($\text{Bernoulli}(0.5)$) without knowledge of $K$.
+4. **Quantum Interception (Intercept-Resend):** Measures transmitted qubits in randomly selected bases and re-sends the collapsed eigenstates.
+5. **Replay Attacks:** Captures a previously valid quantum signature:
+   - *Different-Message Replay:* Replays a captured signature for message $M'$ against target message $M$.
+   - *Same-Message Replay (Legacy Mode):* Replays captured states verbatim without session binding.
+   - *Same-Message Replay (Protected Mode):* Replays captured states against an append-only NonceRegistry.
+6. **Unauthorized Verification:** An adversary attempts verification without a valid constant-time HMAC-SHA256 token.
 
-No quantum computer, however powerful, can copy or intercept these quantum states without leaving a trace. This is guaranteed by the No-Cloning Theorem, not just hard math.
+### Explicit Cryptographic Assumptions
+- The public classical channel used for BBM92 sifting and teleportation correction bits is assumed to be authenticated.
+- Coherent, collective, and adaptive quantum attacks are not modeled.
+- Security against forgery rests on the secrecy of key $K$ and the no-cloning theorem; this repository provides a simulation-based evaluation, not a formal security proof.
+- The baseline noise rate $p_0$ is a calibrated experimental parameter, not a universal constant.
 
 ---
 
-## Lab Sections
+## Experimental Results
 
-The lab has 12 sections accessible from the left sidebar.
+All experiments below were generated using Qiskit Aer (`AerSimulator`) with fixed random seed `20260101` via `python evaluation/make_results.py`. Data points represent repeated independent runs (20 repeats per point) with Wilson 95% confidence intervals.
 
-### 1. Overview
+### Figure 1: Detection Rate vs. Channel Tampering Strength
+![Detection Rate vs Channel Tampering](assets/results/fig1_detection_vs_attack_strength.png)
+*Data source: [`results/detection_vs_attack_strength.csv`](results/detection_vs_attack_strength.csv)*
 
-A high-level explanation of what Quantum Digital Signatures are, why they matter for future cybersecurity, and how this lab demonstrates the concept.
+**Observation:** At baseline calibration $p_0 = 0.02$ and $\alpha = 0.05$ ($n = 64$), the detection rate is 0.00 at $p = 0.00$, rises to 0.55 at $p = 0.075$, reaches 0.85 at $p = 0.150$, and achieves 1.00 for $p \ge 0.225$. Weak channel disturbances below $p \approx 0.05$ remain difficult to distinguish from baseline noise under finite sampling.
 
-### 2. Protocol: How Signing Works
+### Figure 2: Observed Error Rate vs. Injected Baseline Noise
+![Observed Error Rate vs Injected Noise](assets/results/fig2_error_rate_vs_noise.png)
+*Data source: [`results/error_rate_vs_noise.csv`](results/error_rate_vs_noise.csv)*
 
-Opens on the Mathematical Model: the formal protocol description with rendered equations covering Bell-state entanglement, the teleportation expansion in the Bell basis, Pauli correction operations, projective measurement operators, the two-threshold decision rule, and the derived error rate of every attack. The full derivation lives in `docs/mathematical_model.md`.
+**Observation:** Under legitimate traffic subjected to physical Pauli-$X$ channel noise at probability $p_{\text{noise}}$, the observed error rate follows $\frac{2}{3} p_{\text{noise}}$ (e.g., mean error 0.0328 at $p = 0.05$, 0.0570 at $p = 0.10$, and 0.1094 at $p = 0.15$). This matches theory because Pauli-$X$ transforms $Z$ and $Y$ eigenstates but leaves the $X$ basis undisturbed.
 
-Then a step-by-step walkthrough of the complete QDS process:
+### Figure 3: Detector False-Positive Rate Under Calibrated Noise
+![False Positive Rate Under Noise](assets/results/fig3_false_positive_rate.png)
+*Data source: [`results/false_positive_rate.csv`](results/false_positive_rate.csv)*
 
-| Step | What Happens |
-|------|-------------|
-| Message Input | Type any message (e.g. "Transfer Rs 10,000 to Ojas") |
-| SHA-256 Hashing | The message is converted into a 256-bit unique fingerprint |
-| Session Binding | A random nonce, counter, signer identity, and timestamp are bound into the digest |
-| Quantum Encoding | Each bit is encoded into a quantum particle state (one of 6 Pauli eigenstates) |
-| Quantum Teleportation | The state is transmitted using a 3-qubit teleportation circuit |
-| Measurement | The receiver measures each particle in the correct basis (Z, X, or Y) |
-| Verification | A three-way ACCEPT / ABORT / REJECT rule confirms authenticity |
+**Observation:** When the detector's baseline parameter $p_0$ is correctly calibrated to the channel noise level, the false-positive rate across 20 trials per level is 0.00 for 14 of 16 tested levels and 0.05 for two levels ($p = 0.01$ and $p = 0.10$). The empirical false-alarm rate is consistent with the nominal significance threshold $\alpha = 0.05$.
 
-You can change the message, the quantum state, and the measurement basis, and see the circuit diagram update in real time.
+### Figure 4: Detection Rate vs. Signature Length ($n$)
+![Detection Rate vs Signature Length](assets/results/fig4_detection_vs_n.png)
+*Data source: [`results/detection_vs_n.csv`](results/detection_vs_n.csv)*
 
-### 3. Key Distribution: Establish the Key with Quantum Physics
+**Observation:** Signature forgery and random impersonation achieve a 1.00 detection rate across all tested signature lengths ($n \in \{16, 32, 64, 128, 256\}$) due to their ~50% error rate. Interception achieves 0.90 detection at $n = 16$ and 1.00 for $n \ge 32$, whereas channel tampering at $p = 0.20$ (error rate $\approx 13.3\%$) requires $n \ge 128$ to achieve a 1.00 detection rate.
 
-Rather than assuming a pre-shared key, this section establishes it with BBM92, the entanglement-based equivalent of BB84:
+### Figure 5: Replay Attack Scenarios and Nonce Binding
+![Replay Attack Scenarios](assets/results/fig5_replay_scenarios.png)
+*Data source: [`results/replay_scenarios.csv`](results/replay_scenarios.csv)*
 
-1. A Bell pair is prepared and split between the two parties.
-2. Each measures in an independently chosen random basis.
-3. Bases are compared publicly; mismatches are discarded (sifting).
-4. A random sample is disclosed to estimate the QBER, then discarded.
-5. The remainder becomes the key.
-
-Switch on the intercept-resend eavesdropper and watch the QBER jump to the predicted `(1 - 1/B)/2`: 25% with two bases, 33.3% with three. An honest channel gives exactly 0% on the ideal simulator.
-
-Note: The Bell state anti-correlates under Y tensor Y, so the receiver inverts Y-basis outcomes during reconciliation. Getting this wrong produces a 100% error rate on Y-sifted positions.
-
-### 4. Quantum Lab: Run Experiments
-
-This is the heart of the lab. You can run 256-qubit simulations and tune every parameter:
-
-- Number of signature bits (more bits = more secure).
-- Number of shots (more = more accurate statistics).
-- Quantum backend: ideal simulation, noise-affected simulation, or real hardware.
-- Noise level: introduce realistic hardware noise and see how it affects security.
-
-The lab shows you:
-
-- Live measurement outcome charts (what the quantum computer actually measured).
-- Fidelity score (how close the received state is to what was sent).
-- Verification result: ACCEPT, ABORT, or REJECT.
-- Full circuit diagrams rendered as professional quantum circuit art.
-
-### 5. Hardware Validation: Run on Real IBM Quantum Computers
-
-This section connects to real quantum hardware hosted by IBM in data centres around the world.
-
-What you need:
-
-- A free IBM Quantum account at quantum.ibm.com.
-- Your API Key from your IBM Cloud dashboard.
-- Your Instance CRN (the resource identifier from your IBM Quantum instance).
-
-What happens when you connect:
-
-- The lab authenticates to IBM's quantum cloud.
-- It discovers which physical quantum computers (QPUs) are available for your account.
-- You select a QPU (e.g. `ibm_fez`, `ibm_marrakesh`, or `ibm_kingston`).
-- Your quantum circuit is transpiled (optimised for the specific hardware) and submitted to the cloud queue.
-- When the physical QPU runs your circuit, results come back and are compared side-by-side against ideal simulation.
-
-Do not want to wait in the cloud queue? Select IBM Realistic QPU Noise Simulators (Offline / Instant) instead. These run on your own machine in 1-2 seconds but use the same calibrated noise data from real IBM hardware.
-
-Available QPUs (IBM Open Plan, free):
-
-| QPU Name | Qubits | Processor Type |
-|----------|--------|----------------|
-| `ibm_fez` | 156 | Heron r2 |
-| `ibm_marrakesh` | 156 | Heron r2 |
-| `ibm_kingston` | 156 | Heron r2 |
-
-Available Offline Noise Simulators (Instant):
-
-| Simulator | Based On | Qubits |
-|-----------|---------|--------|
-| `fake_fez` | IBM Fez calibration data | 156 |
-| `fake_marrakesh` | IBM Marrakesh calibration data | 156 |
-| `fake_kingston` | IBM Kingston calibration data | 156 |
-| `fake_brisbane` | IBM Brisbane calibration data | 127 |
-| `fake_torino` | IBM Torino calibration data | 133 |
-| `fake_sherbrooke` | IBM Sherbrooke calibration data | 127 |
-
-### 6. Security Lab: Attack the System
-
-This is the most important section. You can launch 6 different cyberattacks against the QDS system and watch whether the built-in detector catches them.
-
-#### Attack 1: Channel Tampering (Bit-Flip)
-
-What it simulates: An attacker intercepts the quantum channel and applies Pauli-X errors during transmission.
-
-What happens: The tampered bits cause measurement anomalies. The Binomial detector flags the error rate as statistically impossible under normal noise, raising a threat alert. The X-basis immunity signature (errors in Z and Y but not X) uniquely identifies this attack.
-
-#### Attack 2: Signature Forgery
-
-What it simulates: Eve tries to forge a signature by guessing the secret key is all zeros (preparing states from the bare digest).
-
-What happens: Without knowing the actual secret key, Eve's forged signature has errors at every position where K_i = 1. With key 1-density near 50%, the error rate is approximately 50%, immediately detected as fraudulent. The Matthews correlation coefficient (MCC between error pattern and key) approaches +1.0, uniquely identifying forgery.
-
-#### Attack 3: Impersonation
-
-What it simulates: Eve tries to impersonate the signer by randomly guessing what quantum states were sent (Bernoulli(0.5) guesses).
-
-What happens: Random guessing produces a 50% error rate, uniformly distributed across all three bases. The statistical test has near-100% detection probability. The MCC is near 0, distinguishing impersonation from forgery.
-
-#### Attack 4: Quantum Interception (Intercept-Resend)
-
-What it simulates: Eve intercepts each quantum particle, measures it in a random basis, and re-sends a new particle in the measured eigenstate. This is the quantum equivalent of wiretapping.
-
-What happens: Eve's basis matches the sender's for 1/3 of positions (no disturbance) and differs for the other 2/3, where measurement collapses the state and the receiver errs half the time. The resulting error rate is exactly 1/3 (approximately 33.3%), a direct consequence of the no-cloning theorem. The uniform distribution across all three bases at 1/3 uniquely identifies this attack.
-
-#### Attack 5: Replay Attack
-
-What it simulates: Eve captures a valid signed message and tries to reuse it later.
-
-The lab runs three scenarios side by side:
-
-1. Different-message replay: Eve replays a signature captured for message M' and presents it for a different message M. The SHA-256 avalanche effect causes approximately 50% bit difference between the two digests, detected immediately via the Hamming distance HD(D,D')/256.
-
-2. Same-message replay with nonce reuse: Eve replays the captured signature verbatim (same message, same session nonce). The verifier's nonce registry has already consumed that nonce, so the replay is rejected in O(1) before any quantum state is measured. This is a deterministic classical check.
-
-3. Same-message replay with fresh nonce: Eve invents a new nonce to evade the registry, but the session binding changes the digest. She must now re-derive all 256 quantum states without the key, which reduces to the forgery problem and is detected at approximately 50% error.
-
-The lab runs both the legacy (unbound) and protected (nonce-bound) modes side by side so you can see exactly what the freshness mechanism buys.
-
-#### Attack 6: Unauthorized Verification Attempt
-
-What it simulates: A party tries to verify a signature without being entitled to, presenting no token, a fabricated token, or a token validly issued to someone else.
-
-What happens: Verification is gated by an HMAC-SHA256 authorization token compared in constant time. All three attacker profiles are denied deterministically (no statistical uncertainty, no false positives) and, critically, before any quantum state is measured. Since measurement destroys a signature, letting an unauthorized party verify would itself be a denial-of-service vector.
-
-### 7. Threat Classification: Which Attack Was It?
-
-A single error rate tells you something is wrong. It cannot tell you what, because forgery, impersonation, and different-message replay all produce approximately 50% errors.
-
-This section classifies the threat from the basis-resolved error signature (e_Z, e_X, e_Y) plus deterministic discriminators:
-
-| Threat | e_Z | e_X | e_Y | MCC(E,K) | Discriminator |
-|--------|-----|-----|-----|----------|---------------|
-| No attack | p0 | p0 | p0 | ~0 | All bases at baseline |
-| Channel tampering | p | ~0 | p | ~0 | X-basis immunity |
-| Intercept-resend | 1/3 | 1/3 | 1/3 | ~0 | Uniform at 1/3 |
-| Forgery | rho | rho | rho | ~+1 | Errors track K_i = 1 |
-| Impersonation | 1/2 | 1/2 | 1/2 | ~0 | Uniform, independent of K |
-| Replay (diff. msg) | h | h | h | ~0 | Classical digest mismatch |
-| Replay (same msg) | p0 | p0 | p0 | ~0 | Nonce registry (deterministic) |
-| Unauthorized verify | - | - | - | - | HMAC validation (deterministic) |
-
-Two discriminators do the heavy lifting:
-
-- X-basis immunity. A Pauli-X error maps |+> to |+> and |-> to -|->. Both are X eigenstates, so the X basis records no error at all. No other attack spares an entire basis.
-- Key correlation. A digest-only forger errs exactly where K_i = 1, so the error pattern is a copy of the key (Matthews correlation approaches +1). An impersonator guessing at random errs independently of K (correlation approaches 0).
-
-Verified at 18/18 correct across all eight hypotheses at n = 256. Classification is only reliable when the sample can resolve the hypotheses: separating 1/3 from 1/2 needs n >= 153 at 3 sigma. The classifier reports a resolution warning and scales confidence down on small subsets.
-
-No AI or ML: classification is deterministic distance scoring against closed-form signatures.
-
-### 8. Analysis: Deep Dive Results
-
-After running experiments, this section gives you publication-quality charts and tables:
-
-- Interactive Binomial Explorer: the hypothesis test with its critical region.
-- Basis-wise Noise Analysis: which measurement basis (Z, X, Y) is most and least affected.
-- Security Comparison Table: side-by-side quantitative and qualitative comparison across all 8 attack scenarios, with nonce/binding columns showing what freshness mechanism each attack faces.
-- Multi-Attack Sweep: run every attack in one click.
-
-### 9. Security Bounds: How Strong Is It?
-
-Exact closed-form binomial quantities, not simulations.
-
-Forgery probability. An adversary without the key has no information about b_i = d_i XOR K_i, so their best strategy at each position is a coin flip:
-
-```
-P_forge(n, s_a) = Sum(j=0 to floor(s_a * n)) C(n,j) * (1/2)^n
-```
-
-| n | Max tolerated errors | P_forge | Security |
-|---|----------------------|---------|----------|
-| 16 | 0 | 1.53 x 10^-5 | 16.0 bits |
-| 64 | 2 | 1.13 x 10^-16 | 53.0 bits |
-| 256 | 11 | 5.64 x 10^-59 | 193.5 bits |
-
-This bound is information-theoretic: it holds against unbounded computational power, including a quantum computer, because the attacker lacks information about K rather than facing a hard computation. Shor's algorithm has nothing to attack.
-
-Detection power. The exact power of the binomial detector against each attack at n = 256, p0 = 0.02, alpha = 0.05:
-
-| Attack | Error rate q | Detection power | False-positive rate |
-|--------|-------------|-----------------|---------------------|
-| Channel tampering, p = 0.10 | 0.067 | 0.978 | 0.035 |
-| Intercept-resend | 0.333 | > 0.999999 | 0.035 |
-| Forgery / Impersonation / Replay (diff. msg) | 0.500 | > 0.999999 | 0.035 |
-| Replay (same msg) | N/A | 1.0 (deterministic) | 0.0 |
-| Unauthorized verification | N/A | 1.0 (deterministic) | 0.0 |
-
-Decision thresholds. The three-way rule and its honest limits are shown, including the fact that weak channel tampering lands in ABORT rather than REJECT.
-
-### 10. Performance: Measured, Not Asserted
-
-- Analytic complexity table for every protocol stage.
-- Empirical scaling: times verification across signature lengths and fits the log-log slope. Measured exponent k = 1.01 with R^2 = 0.9997, confirming O(n) at approximately 1.7 ms per position.
-- Classical vs quantum cost: the classical stage is approximately 1000x cheaper per position than circuit execution, confirming the constant factor is simulator overhead rather than protocol arithmetic.
-
-Benchmark methodology: one untimed warm-up pass, then the minimum of N timed runs. Timing noise is strictly additive, so the fastest run is the closest estimate of true cost.
-
-### 11. Audit Log: Security Event Trail
-
-Append-only JSON Lines record of every verification, threat detection, authorization denial, replay block, and key-establishment run. Filter by severity, inspect individual event payloads, and export as JSON.
-
-Secret hygiene: key material is never written. Only non-invertible derived quantities are recorded (the key's 1-bit density, a 16-character digest prefix, and the nonce which is a public protocol value needed for replay forensics). Fields matching known-sensitive names are replaced with `[REDACTED]` as defence in depth, so the log is safe to export.
-
-### 12. Reproducibility: Full Experiment Record
-
-Environment, every parameter, key provenance, decision thresholds, and seed-derivation method, exportable as JSON.
+**Observation:** Without session binding, same-message replay produces an observed error rate of 0.0000 and is undetectable by measurement alone. Binding a session nonce allows the verifier's `NonceRegistry` to block the replay classically in $\mathcal{O}(1)$ time prior to quantum measurement, while different-message replay produces a mean error rate of 0.5469 (theoretical 0.5352) and is detected with 1.00 probability.
 
 ---
 
-## Who Is This For
+## Known Limitations
 
-| Audience | What They Get |
-|----------|--------------|
-| Students | Hands-on quantum computing experience without needing any hardware |
-| Researchers | Reproducible QDS protocol implementation with full parameter control |
-| Cybersecurity professionals | Live attack simulation and statistical threat detection framework |
-| IBM Quantum users | Direct integration with real QPUs and noise simulators |
-| Hackathon judges | Complete end-to-end quantum cryptography demonstration |
+1. **Simulation vs. Physical Hardware:** The full 256-qubit protocol evaluation runs entirely in simulation using Qiskit Aer. Real hardware execution via IBM Quantum is supported only for single representative 3-qubit teleportation primitives due to device queue latency and gate noise.
+2. **Two-Party Authentication Only:** The secret key $K$ is shared symmetrically between Alice and Bob. Consequently, Bob possesses sufficient information to forge any signature that Alice could create. The protocol does not provide non-repudiation or multi-party transferability without asymmetric key partitioning (e.g., Gottesman-Chuang style schemes).
+3. **No Composable Key Security:** While the BBM92 module simulates Bell-state measurements, sifting, and QBER threshold estimation, it does not implement classical information reconciliation (error correction) or privacy amplification.
+4. **Restricted Adversary Model:** The threat simulation models only individual-qubit operations. Coherent, collective, and adaptive quantum measurement attacks are outside the scope of this implementation.
+5. **Classical Freshness Dependencies:** The replay resistance mechanism and authorization checks rely on classical primitives (`secrets`, SHA-256, HMAC-SHA256). These provide computational and architectural guarantees rather than information-theoretic bounds.
+6. **In-Memory Registry:** The `NonceRegistry` stores consumed nonces in volatile process memory and does not persist state across restarts.
+7. **Noise Calibration Requirement:** The statistical decision engine requires an explicitly calibrated baseline error rate $p_0$. Disturbances weaker than the calibrated baseline noise floor are information-theoretically indistinguishable from channel noise.
 
 ---
 
-## How to Run It Locally
+## Reproducibility
 
-### Prerequisites
-
-- Python 3.10 or higher
-- A terminal (Command Prompt, PowerShell, or bash)
-
-### Step 1: Clone the repository
-
+### Environment Setup
 ```bash
-git clone https://github.com/ojasbisht1962/QKD.git
+git clone https://github.com/Naman-Vasudev/QKD.git
 cd QKD
-```
-
-### Step 2: Create a virtual environment
-
-```bash
 python -m venv .venv
-```
 
-Windows (PowerShell):
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-Linux / macOS:
-
-```bash
+# Linux / macOS
 source .venv/bin/activate
-```
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
 
-### Step 3: Install dependencies
-
-```bash
 pip install -r requirements.txt
 ```
 
-### Step 4: Launch the app
-
+### Reproducing Benchmark Experiments
+To regenerate all 5 CSV data tables in `results/` and PNG figures in `assets/results/`:
 ```bash
-streamlit run app.py
+python evaluation/make_results.py
 ```
 
-The app opens automatically at `http://localhost:8501` in your browser.
-
-No IBM account required to use Local Simulation mode. All quantum experiments run instantly on your own computer using Qiskit's built-in simulator.
-
----
-
-## Connecting to IBM Quantum Hardware (Optional)
-
-To run circuits on real quantum computers:
-
-1. Sign up for free at quantum.ibm.com.
-2. Create an IBM Cloud instance (Open Plan is free).
-3. Copy your API Key from IBM Cloud, then API Keys.
-4. Copy your Instance CRN from your quantum instance card.
-5. Open the Hardware Validation tab in the app.
-6. Paste your API Key and CRN into the fields.
-7. Select channel: `ibm_cloud`.
-8. Click AUTHENTICATE AND SAVE CREDENTIALS.
-9. Select a QPU and run your experiment.
-
-Your credentials are never stored in the code or sent anywhere except directly to IBM's servers.
-
----
-
-## Running the Test Suite
-
+### Running Test Suite
+To execute the automated regression test suite (220 tests):
 ```bash
 pytest
 ```
 
-All 220 unit tests pass in about 6 minutes using local simulation. No IBM account needed.
-
-Coverage includes: the analytic error rate of every attack, classification accuracy across all eight threat hypotheses, forgery bounds checked against independently computed exact binomial values, nonce replay rejection, HMAC authorization on all three attacker profiles, BBM92 QBER against its 25% / 33.3% theoretical values, audit-log secret hygiene, and the O(n) complexity exponent.
+### Running Interactive Web Laboratory
+```bash
+streamlit run app.py
+```
 
 ---
 
 ## Project Structure
 
 ```
-SIH2026/
-|-- app.py                        Main Streamlit web application (all 12 sections)
-|-- requirements.txt              Python dependencies
-|
-|-- docs/
-|   +-- mathematical_model.md     Formal protocol model, derivations, security scope
-|
-|-- qds/                          Core quantum protocol implementation
-|   |-- encoding.py               SHA-256 hashing, session binding, secret key XOR
-|   |-- states.py                 Pauli eigenstate preparation and basis rotation
-|   |-- teleportation.py          3-qubit teleportation + Pauli corrections
-|   |-- verification.py           Verification pipeline (auth -> freshness -> quantum)
-|   |-- session.py                Session nonces, replay registry, verifier authorization
-|   |-- keydist.py                BBM92 entanglement-based quantum key distribution
-|   +-- circuit_visualization.py  Circuit builder and renderer
-|
-|-- core/                         Infrastructure
-|   |-- models.py                 All protocol dataclasses
-|   |-- backend.py                AerSimulator + IBM noise model adapter
-|   |-- hardware.py               IBM Quantum cloud authentication and QPU management
-|   |-- seeding.py                Reproducible, unbiased per-shot simulator seeds
-|   +-- audit.py                  Append-only security event logging
-|
-|-- attacks/                      All 6 attack simulations
-|   |-- channel.py                Channel tampering (bit-flip)
-|   |-- forgery.py                Signature forgery
-|   |-- impersonation.py          Identity impersonation
-|   |-- interception.py           Quantum intercept-resend attack
-|   |-- replay.py                 Replay attack (nonce-aware) + Hamming distance
-|   +-- unauthorized.py           Unauthorized verification attempts
-|
-|-- qds_statistics/               Threat detection and analysis engine
-|   |-- detector.py               Binomial test + three-way decision rule
-|   |-- classifier.py             Basis-resolved threat classification (8 hypotheses)
-|   +-- bounds.py                 Forgery probability and detection power
-|
-|-- evaluation/                   Experiment orchestration and measurement
-|   |-- runner.py                 Multi-attack sweep, security comparison (8 scenarios)
-|   +-- performance.py            Timing, throughput, complexity scaling
-|
-|-- tests/                        220 unit tests (full regression suite)
-|
-+-- assets/                       Background image and static assets
+.
+├── app.py                     # Streamlit web application (12 interactive modules)
+├── requirements.txt           # Dependencies (qiskit, qiskit-aer, scipy, streamlit, etc.)
+├── AUDIT.md                   # Pre-submission codebase audit and claim validation
+├── qds/                       # Protocol core implementation
+│   ├── encoding.py            # SHA-256 preprocessing, session binding, XOR key encoding
+│   ├── states.py              # 6 Pauli eigenstate preparation and basis rotations
+│   ├── teleportation.py       # 3-qubit teleportation circuit construction and execution
+│   ├── verification.py        # End-to-end verification pipeline (Auth -> Freshness -> Quantum)
+│   ├── session.py             # NonceRegistry, session binding, and HMAC authorization
+│   └── keydist.py             # BBM92 entanglement-based quantum key distribution
+├── core/                      # Infrastructure and execution
+│   ├── backend.py             # Qiskit Aer and IBM noise model backend adapter
+│   ├── hardware.py            # IBM Quantum cloud authentication and QPU discovery
+│   ├── seeding.py             # Unbiased PRNG seed derivation for simulator shots
+│   ├── models.py              # Dataclasses and type definitions
+│   └── audit.py               # Append-only JSONL security event logger
+├── attacks/                   # Attack simulation modules
+│   ├── channel.py             # Pauli-X channel tampering simulation
+│   ├── forgery.py             # Digest-only signature forgery simulation
+│   ├── impersonation.py       # Random guessing impersonation simulation
+│   ├── interception.py        # Intercept-resend eavesdropping simulation
+│   ├── replay.py              # Nonce-aware replay attack simulations
+│   └── unauthorized.py        # Unauthorized verifier access simulation
+├── qds_statistics/            # Statistical decision engine (non-ML)
+│   ├── detector.py            # Exact Binomial hypothesis testing and decision thresholds
+│   ├── classifier.py          # Basis-resolved error profiling and threat classification
+│   └── bounds.py              # Analytical forgery probability and detection power bounds
+├── evaluation/                # Benchmarking and experimental scripts
+│   ├── make_results.py        # Reproducible experiment runner generating CSVs and figures
+│   ├── runner.py              # Unified scenario dispatcher and multi-attack sweeps
+│   └── performance.py         # Empirical runtime complexity measurement
+├── tests/                     # 220 automated unit tests
+├── results/                   # Generated experimental CSV data tables
+└── assets/results/            # Generated high-resolution experiment plots
 ```
 
-The threat-detection package is named `qds_statistics`, not `statistics`. A top-level package named `statistics` shadows the Python standard library module of the same name for every module in the process, because the application directory is prepended to `sys.path`.
-
 ---
 
-## Technology Stack
+## My Contribution
 
-| Component | Technology |
-|-----------|-----------|
-| Quantum Computing | Qiskit 2.5+ (IBM's open-source quantum SDK) |
-| Quantum Simulation | Qiskit Aer (high-performance local simulator) |
-| Real Hardware | IBM Quantum via qiskit-ibm-runtime |
-| Web Interface | Streamlit (Python-based interactive web apps) |
-| Statistical Tests | SciPy (Binomial hypothesis testing, exact tails) |
-| Charts and Visualisation | Matplotlib |
-| Cryptographic Hashing | Python hashlib (SHA-256), hmac (HMAC-SHA256) |
-| Secure Randomness | Python secrets (CSPRNG) |
-| Language | Python 3.11+ |
-
----
-
-## Key Concepts Explained
-
-**Qubit.** A quantum bit. Unlike a classical bit (0 or 1), a qubit can be 0, 1, or both at the same time (superposition). When measured, it collapses to 0 or 1.
-
-**Quantum Teleportation.** Transmitting a quantum state from one place to another using entanglement, without physically moving the particle. The state is destroyed at the source and recreated at the destination. Information is perfectly transferred.
-
-**Quantum Entanglement.** Two particles linked such that measuring one instantly determines the state of the other, regardless of distance.
-
-**No-Cloning Theorem.** It is physically impossible to make a perfect copy of an unknown quantum state. This means an eavesdropper cannot intercept and copy quantum-encoded information without being detected.
-
-**Fidelity.** A score from 0 to 1 measuring how similar the received quantum state is to the original. 1.0 = perfect transmission. Any attack or hardware noise reduces fidelity.
-
-**Binomial Hypothesis Test.** A statistical method that asks: "How likely is it to see this many errors by pure chance?" If that probability falls below the significance level alpha, the system raises a threat alert.
-
-**Transpilation.** Converting a generic quantum circuit into instructions the specific hardware understands (each quantum computer has its own set of native operations).
-
-**Session Nonce.** A single-use random value bound into the hashed payload. Because the digest changes with the nonce, a captured signature cannot be presented twice: the verifier's nonce registry rejects the reused nonce outright.
-
-**QBER (Quantum Bit Error Rate).** The disagreement rate between two parties' sifted key bits. Zero on an honest ideal channel; an eavesdropper forces it up to a predictable value (25% with two bases), which is how eavesdropping is caught.
-
-**Information-Theoretic Security.** Security that holds against an attacker with unlimited computing power, because they lack information rather than lacking time. This is why a quantum computer does not help: there is no computation to speed up.
-
----
-
-## Problem Statement Coverage
-
-Built against SIH2026 PS5: Quantum-Inspired Cyber Threat Detection for Digital Signature Security.
-
-| # | Deliverable | Where |
-|---|-------------|-------|
-| 1 | Mathematical model of teleportation-based QDS | `docs/mathematical_model.md` + Protocol section (Mathematical Model tab) |
-| 2 | Quantum-inspired threat detection framework | `qds_statistics/detector.py`, `qds_statistics/classifier.py` (Threat Classification section) |
-| 3 | Signature generation and verification module | `qds/encoding.py`, `qds/teleportation.py`, `qds/verification.py`, `qds/session.py`, `qds/keydist.py` (Key Distribution section) |
-| 4 | Attack simulation module | `attacks/` (6 attacks: channel tampering, forgery, impersonation, interception, replay, unauthorized) (Security Lab section) |
-| 5 | Security analysis and performance evaluation | `qds_statistics/bounds.py`, `evaluation/performance.py` (Security Bounds, Performance sections) |
-| 6 | Software framework / prototype | `app.py` (12 sections), `core/audit.py` (Audit Log section) |
-
-All four named threat classes (forgery, impersonation, replay attacks, and channel manipulation) plus unauthorized verification attempts are detected and identified by class.
-
----
-
-## Scientific Disclosures
-
-- All numerical results are traceable to actual Qiskit Aer simulations. Nothing is fabricated.
-- IBM Quantum hardware validation uses 3-qubit representative circuits. Full 256-position experiments run locally on the simulator for speed and reproducibility. Note that "256-qubit" means 256 sequential 3-qubit teleportation circuits, not a single 256-qubit circuit.
-- The baseline noise rate is a calibrated experimental parameter, not a universal constant.
-- Statistical detection establishes inconsistency with calibrated noise; it does not prove adversarial intent.
-- Threat classification is deterministic distance scoring against closed-form analytic signatures. No artificial intelligence or machine learning is used anywhere in this system.
-- Per-shot simulator seeds are drawn from a seeded RNG rather than consecutive integers. Consecutive seeds bias single-shot Aer sampling (measured at 55.6% versus a true 50% over 800 shots, z = +3.2).
-
-### Known Limitations
-
-- Non-repudiation / transferability is not provided. A full QDS scheme lets a recipient forward a signature to a third party who reaches the same verdict. This is a two-party authentication scheme: K is shared, so the verifier could have produced any signature the signer could. Transferability requires per-recipient key halves and a Gottesman-Chuang two-threshold construction.
-- No privacy amplification in key distribution, so the sifted key is not composably secure.
-- Weak channel tampering is not always rejected. The error rate is (2/3)p, so p = 0.10 lands in ABORT and anything below the calibrated noise floor is information-theoretically indistinguishable from noise. Such an attack corrupts a few positions without forging anything.
-- Only individual-qubit adversaries are modelled. Coherent and collective attacks are out of scope.
-- Freshness and verifier authorization are classical mechanisms resting on SHA-256 and HMAC-SHA256, not information-theoretic guarantees. They complement the quantum layer rather than replacing it.
-- The classical channel is assumed authenticated, as BBM92 requires; authenticating it is not implemented.
+I designed the evaluation experiments, formulated the threat scenarios and statistical decision criteria, and directed the architecture and implementation. The codebase was developed using AI-assisted pair programming. This project began as part of a Smart India Hackathon 2026 team submission (Team Ghost Protocol / EGRESO QUANTA) and was subsequently refined into an open simulation and benchmarking testbed.
 
 ---
 
 ## License
 
 MIT License. Free to use, modify, and distribute with attribution.
-
----
-
-Built for Smart India Hackathon 2026, Quantum Cybersecurity Track.
