@@ -52,6 +52,7 @@ matplotlib.use("Agg")  # non-interactive backend for headless/server runs
 import matplotlib.pyplot as plt
 import numpy as np
 
+import time
 from core.backend import QuantumBackendAdapter
 from core.seeding import derive_seed
 from qds.session import NonceRegistry, create_session
@@ -60,6 +61,7 @@ from attacks.forgery import run_forgery_attack
 from attacks.impersonation import run_impersonation_attack
 from attacks.interception import run_interception_attack
 from attacks.replay import run_replay_attack, compute_digest_hamming_distance
+from attacks.basis_aware import run_basis_aware_attack
 from qds_statistics.detector import detect_threat, compute_decision_thresholds
 
 # ---------------------------------------------------------------------------
@@ -79,9 +81,10 @@ N_QUBITS = 64                   # signature length for sweep experiments (faster
 N_QUBITS_FULL = 256             # used only for Figure 4 endpoint
 P0 = 0.02                       # baseline error rate (synthetic calibration parameter)
 ALPHA = 0.05                    # significance level
-N_REPEATS = 20                  # independent runs per data point for detection-rate estimation
+N_REPEATS = 50                  # 50 repeats per point: high statistical power while keeping runtime reasonable (~15-20m)
 SHOTS_PER_QUBIT = 1             # one shot per teleportation circuit (standard for this codebase)
 DPI = 150
+T_START = time.time()
 
 # A fixed balanced 256-bit key derived deterministically from MASTER_SEED.
 # key_one_density ≈ 0.5 by construction (128 ones).
@@ -532,9 +535,67 @@ save_fig(fig5, os.path.join(FIGURES_DIR, "fig5_replay_scenarios.png"))
 
 
 # ---------------------------------------------------------------------------
+# Section 6: Basis-Aware Individual-Qubit Interceptor Evaluation
+# ---------------------------------------------------------------------------
+print("\n=== Section 6: Basis-Aware Interceptor Evaluation ===")
+ba_rows = []
+ba_leak_rates = []
+ba_err_rates = []
+ba_detections = []
+
+for rep in range(N_REPEATS):
+    seed = derive_seed(MASTER_SEED + 6000, rep)
+    r_ba = run_basis_aware_attack(
+        message=MESSAGE,
+        shared_key=SHARED_KEY,
+        shots_per_qubit=SHOTS_PER_QUBIT,
+        baseline_error_rate=P0,
+        alpha=ALPHA,
+        sample_indices=SAMPLE_INDICES,
+        backend=BACKEND,
+        seed=seed,
+    )
+    ba_leak_rates.append(r_ba["key_leakage_rate"])
+    ba_err_rates.append(r_ba["observed_error_rate"])
+    ba_detections.append(1 if r_ba["threat_result"].threat_detected else 0)
+
+mean_leak = float(np.mean(ba_leak_rates))
+mean_err = float(np.mean(ba_err_rates))
+det_rate_ba = sum(ba_detections) / N_REPEATS
+lo_ba, hi_ba = wilson_ci(sum(ba_detections), N_REPEATS)
+
+print(f"  Basis-Aware Interceptor ({N_REPEATS} runs, n={N_QUBITS}):")
+print(f"    Key leakage fraction: {mean_leak:.4f}")
+print(f"    Observed error rate:  {mean_err:.4f}")
+print(f"    Detection rate:       {det_rate_ba:.4f} (95% CI: [{lo_ba:.4f}, {hi_ba:.4f}])")
+
+ba_rows.append({
+    "attack": "basis_aware_interception",
+    "n_qubits": N_QUBITS,
+    "n_repeats": N_REPEATS,
+    "mean_key_leakage_rate": mean_leak,
+    "mean_observed_error_rate": mean_err,
+    "detection_rate": det_rate_ba,
+    "ci_lo": lo_ba,
+    "ci_hi": hi_ba,
+    "p0": P0,
+    "alpha": ALPHA,
+})
+
+write_csv(
+    os.path.join(RESULTS_DIR, "basis_aware_attack.csv"),
+    ba_rows,
+    ["attack", "n_qubits", "n_repeats", "mean_key_leakage_rate", "mean_observed_error_rate",
+     "detection_rate", "ci_lo", "ci_hi", "p0", "alpha"],
+)
+
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
+t_elapsed = time.time() - T_START
 print("\n=== Done ===")
+print(f"Total benchmark runtime: {t_elapsed:.1f}s ({t_elapsed/60:.2f} min)")
 print("Figures written to assets/results/")
 print("CSVs written to results/")
 print()

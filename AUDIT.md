@@ -222,3 +222,55 @@ when p0 is high. This is documented in the code but is a confusing user experien
   representative 3-qubit circuit only.
 - Simulator performance numbers are machine- and version-dependent; not independently reproducible
   without specifying the exact environment.
+
+---
+
+## 5. Verification Audit: README Observations vs. Generated CSVs (N=50 Repeats)
+
+The benchmark was executed with $N = 50$ independent repetitions per data point using Qiskit Aer (master seed `20260101`, total runtime: 1135.5s / 18.93 min). Below is the verification table comparing every quantitative claim in the README observation texts against the generated CSV data:
+
+| Metric / Parameter | README Text Claim | CSV Value (`results/*.csv`) | Match? |
+|---|---|---|:---:|
+| **Fig 1:** $p_{\text{attack}} = 0.000$ detection rate | 0.00 | 0.00 (`detection_vs_attack_strength.csv`) | YES |
+| **Fig 1:** $p_{\text{attack}} = 0.025$ detection rate | 0.06 | 0.06 (`detection_vs_attack_strength.csv`) | YES |
+| **Fig 1:** $p_{\text{attack}} = 0.050$ detection rate | 0.20 | 0.20 (`detection_vs_attack_strength.csv`) | YES |
+| **Fig 1:** $p_{\text{attack}} = 0.075$ detection rate | 0.50 | 0.50 (`detection_vs_attack_strength.csv`) | YES |
+| **Fig 1:** $p_{\text{attack}} = 0.100$ detection rate | 0.64 | 0.64 (`detection_vs_attack_strength.csv`) | YES |
+| **Fig 1:** $p_{\text{attack}} = 0.150$ detection rate | 0.82 | 0.82 (`detection_vs_attack_strength.csv`) | YES |
+| **Fig 1:** $p_{\text{attack}} = 0.175$ detection rate | 0.92 | 0.92 (`detection_vs_attack_strength.csv`) | YES |
+| **Fig 1:** $p_{\text{attack}} = 0.200$ detection rate | 0.96 | 0.96 (`detection_vs_attack_strength.csv`) | YES |
+| **Fig 1:** $p_{\text{attack}} \ge 0.225$ detection rate | 1.00 | 1.00 (`detection_vs_attack_strength.csv`) | YES |
+| **Fig 2:** $p_{\text{noise}} = 0.05$ mean error | 0.0350 | 0.0350 (`error_rate_vs_noise.csv`) | YES |
+| **Fig 2:** $p_{\text{noise}} = 0.10$ mean error | 0.0625 | 0.0625 (`error_rate_vs_noise.csv`) | YES |
+| **Fig 2:** $p_{\text{noise}} = 0.15$ mean error | 0.0975 | 0.0975 (`error_rate_vs_noise.csv`) | YES |
+| **Fig 3:** False-positive rate (13 of 16 levels) | 0.00 | 0.00 (`false_positive_rate.csv`) | YES |
+| **Fig 3:** False-positive rate at $p=0.01, 0.06, 0.10$ | 0.02 (1/50) | 0.02 (`false_positive_rate.csv`) | YES |
+| **Fig 3:** Maximum observed false-positive rate | 0.02 ($\le \alpha = 0.05$) | 0.02 (`false_positive_rate.csv`) | YES |
+| **Fig 4:** Forgery detection rate ($n \in \{16, 32, 64, 128, 256\}$) | 1.00 across all $n$ | 1.00 (`detection_vs_n.csv`) | YES |
+| **Fig 4:** Impersonation detection rate ($n \in \{16, 32, 64, 128, 256\}$) | 1.00 across all $n$ | 1.00 (`detection_vs_n.csv`) | YES |
+| **Fig 4:** Interception detection rate ($n=16$) | 0.96 (48/50) | 0.96 (`detection_vs_n.csv`) | YES |
+| **Fig 4:** Interception detection rate ($n \ge 32$) | 1.00 | 1.00 (`detection_vs_n.csv`) | YES |
+| **Fig 4:** Channel ($p=0.20$) detection rate ($n=16$) | 0.64 (32/50) | 0.64 (`detection_vs_n.csv`) | YES |
+| **Fig 4:** Channel ($p=0.20$) detection rate ($n=32$) | 0.78 (39/50) | 0.78 (`detection_vs_n.csv`) | YES |
+| **Fig 4:** Channel ($p=0.20$) detection rate ($n=64$) | 0.96 (48/50) | 0.96 (`detection_vs_n.csv`) | YES |
+| **Fig 4:** Channel ($p=0.20$) detection rate ($n \ge 128$) | 1.00 (50/50) | 1.00 (`detection_vs_n.csv`) | YES |
+| **Fig 4:** Channel ($p=0.20$) theoretical error rate | $2/3 \times 0.20 \approx 0.1333$ ($13.33\%$) | $(2/3) \times 0.20$ | YES |
+| **Fig 5:** Same-msg replay (legacy, no session) error rate | 0.0000 | 0.0000 (`replay_scenarios.csv`) | YES |
+| **Fig 5:** Same-msg replay (legacy, no session) detection | 0.00 | 0.00 (`replay_scenarios.csv`) | YES |
+| **Fig 5:** Same-msg replay (nonce-bound) blocked classically | True (blocked in $\mathcal{O}(1)$) | True (`replay_scenarios.csv`) | YES |
+| **Fig 5:** Diff-msg replay mean error rate | 0.5469 | 0.5469 (`replay_scenarios.csv`) | YES |
+| **Fig 5:** Diff-msg replay theoretical expectation | 0.5352 (137/256) | 0.5352 (`replay_scenarios.csv`) | YES |
+| **Fig 5:** Diff-msg replay detection rate | 1.00 (50/50) | 1.00 (`replay_scenarios.csv`) | YES |
+
+---
+
+## 6. Basis-Aware Adversary Audit Findings (Task 3)
+
+1. **Vulnerability Identification:** The deterministic, public basis schedule $B_i = i \pmod 3$ exposes the scheme to an active individual-qubit interceptor.
+2. **Mechanism:** An adversary intercepting $q_0$ measures in the known preparation basis $B_i$. Since the state is an eigenstate of $B_i$, measurement causes zero collapse disturbance. The outcome directly reveals $b_i = d_i \oplus K_i$. Because $d_i$ is computed from the public message, the adversary extracts $K_i = b_i \oplus d_i$.
+3. **Empirical Simulation Result (`results/basis_aware_attack.csv`):**
+   - **Key leakage:** 100.0% ($64/64$ bits recovered across all 50 repeats).
+   - **Bob's error rate:** 0.0000 (0 errors).
+   - **Detector detection rate:** 0.0000 (95% CI: $[0.0000, 0.0714]$).
+4. **Architectural Consequence:** The scheme does NOT provide key confidentiality or unforgeability against an active individual-qubit adversary who knows the schedule. The theoretical unforgeability bound holds only under the assumption that the quantum channel is untampered, or that the adversary is artificially forced to guess bases uniformly at random.
+
